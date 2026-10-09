@@ -5,6 +5,7 @@ export default function PhotoUploader({ photos, onChange, error }) {
   const ref = useRef();
   const [errs, setErrs] = useState([]);
   const [busy, setBusy] = useState(false);
+
   const add = async (files) => {
     const e = [],
       ok = [];

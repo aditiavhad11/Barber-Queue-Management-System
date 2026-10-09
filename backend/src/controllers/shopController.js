@@ -185,8 +185,11 @@ export async function createShop(req, res) {
 
   // Legacy schema keeps these columns NOT NULL; credentials are generated internally and are not shown to owners.
   const internalLoginEmail = `shop-${id}@internal.invalid`;
+
   const hash = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 12);
+
   const connection = await pool.getConnection();
+
   try {
     await connection.beginTransaction();
     await connection.query(
@@ -226,6 +229,7 @@ export async function createShop(req, res) {
     const services = (b.services || []).filter(
       (x) => x?.name && Number(x.price) > 0 && Number(x.duration) > 0,
     );
+
     const serviceIds = [];
     const serviceIdMap = new Map();
     const serviceRows = services.map((service) => {
@@ -244,7 +248,9 @@ export async function createShop(req, res) {
     await bulkInsert(connection, SERVICE_INSERT, serviceRows);
 
     // ---- barbers + barber_services (2 bulk inserts total) ----
+
     const barberCount = Math.max(1, Number(b.barberCount || b.barbers || 1));
+
     const barbers = Array.isArray(b.barbers)
       ? b.barbers
       : Array.from({ length: barberCount }, (_, i) => ({
@@ -278,6 +284,7 @@ export async function createShop(req, res) {
       for (const sid of idsToUse) barberServiceRows.push([bid, sid]);
     }
     // barbers first, then mappings (FK order preserved)
+
     await bulkInsert(connection, BARBER_INSERT, barberRows);
     await bulkInsert(connection, BARBER_SERVICE_INSERT, barberServiceRows);
 
