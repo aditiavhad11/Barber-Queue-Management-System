@@ -1,5 +1,33 @@
 import { Router } from "express";
 import { auth, requireRole } from "../middleware/auth.js";
-import { listApproved,listMine,createShop,updateShop,updateStatus,resubmit,listAdmin,deleteShop,createBarber,updateBarber,createService } from "../controllers/shopController.js";
-const router=Router(); router.get("/",listApproved); router.get("/mine",auth,requireRole("owner"),listMine); router.post("/",auth,requireRole("owner"),createShop); router.patch("/:id",auth,requireRole("owner"),updateShop);
-router.post("/:id/services",auth,requireRole("owner"),createService); router.post("/:id/barbers",auth,requireRole("owner","shop"),createBarber); router.patch("/:id/barbers/:barberId",auth,requireRole("owner","shop"),updateBarber); router.patch("/:id/status",auth,requireRole("admin"),updateStatus); router.patch("/:id/resubmit",auth,requireRole("owner"),resubmit); router.delete("/:id",auth,requireRole("owner"),deleteShop); router.get("/admin/all",auth,requireRole("admin"),listAdmin); export default router;
+import {
+  listApproved,
+  listMine,
+  createShop,
+  updateShop,
+  updateStatus,
+  resubmit,
+  listAdmin,
+  deleteShop,
+  createBarber,
+  updateBarber,
+  createService,
+} from "../controllers/shopController.js";
+const router = Router();
+router.get("/", listApproved);
+router.get("/mine", auth, requireRole("owner"), listMine);
+router.post("/", auth, requireRole("owner"), createShop);
+router.patch("/:id", auth, requireRole("owner"), updateShop);
+router.post("/:id/services", auth, requireRole("owner"), createService);
+router.post("/:id/barbers", auth, requireRole("owner", "shop"), createBarber);
+router.patch(
+  "/:id/barbers/:barberId",
+  auth,
+  requireRole("owner", "shop"),
+  updateBarber,
+);
+router.patch("/:id/status", auth, requireRole("admin"), updateStatus);
+router.patch("/:id/resubmit", auth, requireRole("owner"), resubmit);
+router.delete("/:id", auth, requireRole("owner"), deleteShop);
+router.get("/admin/all", auth, requireRole("admin"), listAdmin);
+export default router;

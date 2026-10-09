@@ -2,14 +2,17 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../hooks/useAuth";
 
-const EMAIL_REGEX = /^[A-Z0-9.!#$%&'+\/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$/i;
+const EMAIL_REGEX =
+  /^[A-Z0-9.!#$%&'+\/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$/i;
 
 export default function Auth({ mode }) {
   const nav = useNavigate();
   const auth = useAuth();
   const [q] = useSearchParams();
   const requestedRole = q.get("role");
-  const role = ["owner", "admin"].includes(requestedRole) ? requestedRole : "customer";
+  const role = ["owner", "admin"].includes(requestedRole)
+    ? requestedRole
+    : "customer";
   const isAdmin = role === "admin";
 
   const [step, setStep] = useState("form");
@@ -37,7 +40,10 @@ export default function Auth({ mode }) {
   const sendOtp = async (e) => {
     e?.preventDefault();
     setErr("");
-    if (!EMAIL_REGEX.test(email.trim())) { setErr("Enter a valid email address."); return; }
+    if (!EMAIL_REGEX.test(email.trim())) {
+      setErr("Enter a valid email address.");
+      return;
+    }
     setBusy(true);
 
     try {
@@ -63,7 +69,10 @@ export default function Auth({ mode }) {
   const loginWithPassword = async (e) => {
     e.preventDefault();
     setErr("");
-    if (!EMAIL_REGEX.test(email.trim())) { setErr("Enter a valid email address."); return; }
+    if (!EMAIL_REGEX.test(email.trim())) {
+      setErr("Enter a valid email address.");
+      return;
+    }
     setBusy(true);
 
     try {
@@ -78,7 +87,7 @@ export default function Auth({ mode }) {
           ? "/owner"
           : account.role === "admin"
             ? "/admin"
-            : "/app"
+            : "/app",
       );
     } catch (error) {
       setErr(error.message);
@@ -112,7 +121,7 @@ export default function Auth({ mode }) {
           ? "/owner"
           : account.role === "admin"
             ? "/admin"
-            : "/app"
+            : "/app",
       );
     } catch (error) {
       setErr(error.message);
@@ -257,7 +266,10 @@ export default function Auth({ mode }) {
           className="absolute inset-0 w-full h-full object-cover opacity-50"
           alt=""
         />
-        <Link to="/" className="relative font-serif text-3xl text-cream p-10 block">
+        <Link
+          to="/"
+          className="relative font-serif text-3xl text-cream p-10 block"
+        >
           Barber Queue
         </Link>
       </div>
@@ -309,7 +321,9 @@ export default function Auth({ mode }) {
                         setErr("");
                       }}
                       className={`flex-1 py-2 border ${
-                        loginMethod === "password" ? "bg-olive text-[#F4EDE3]" : ""
+                        loginMethod === "password"
+                          ? "bg-olive text-[#F4EDE3]"
+                          : ""
                       }`}
                     >
                       Password
@@ -376,13 +390,19 @@ export default function Auth({ mode }) {
               />
 
               {err && <p className="text-sm text-rose">{err}</p>}
-              {sent && <p className="text-sm text-olive">A new code has been sent.</p>}
+              {sent && (
+                <p className="text-sm text-olive">A new code has been sent.</p>
+              )}
 
               <button className="btn w-full" disabled={busy || otp.length < 6}>
                 {busy ? "Verifying..." : "Verify"}
               </button>
 
-              <button type="button" onClick={sendOtp} className="text-sm underline">
+              <button
+                type="button"
+                onClick={sendOtp}
+                className="text-sm underline"
+              >
                 Resend OTP
               </button>
             </form>
@@ -392,19 +412,31 @@ export default function Auth({ mode }) {
             <p className="mt-6 text-sm">
               {role === "owner" ? (
                 <>
-                  <Link className="underline" to="/sign-in">Customer sign in</Link>
+                  <Link className="underline" to="/sign-in">
+                    Customer sign in
+                  </Link>
                   <span className="mx-2">·</span>
-                  <Link className="underline" to="/shop-sign-in">Shop login</Link>
+                  <Link className="underline" to="/shop-sign-in">
+                    Shop login
+                  </Link>
                 </>
               ) : role === "admin" ? (
-                <Link className="underline" to="/sign-in">Customer sign in</Link>
+                <Link className="underline" to="/sign-in">
+                  Customer sign in
+                </Link>
               ) : (
                 <>
-                  <Link className="underline" to="/sign-in?role=owner">Shop owner? Sign in here</Link>
+                  <Link className="underline" to="/sign-in?role=owner">
+                    Shop owner? Sign in here
+                  </Link>
                   <span className="mx-2">·</span>
-                  <Link className="underline" to="/sign-in?role=admin">Admin</Link>
+                  <Link className="underline" to="/sign-in?role=admin">
+                    Admin
+                  </Link>
                   <span className="mx-2">·</span>
-                  <Link className="underline" to="/shop-sign-in">Shop login</Link>
+                  <Link className="underline" to="/shop-sign-in">
+                    Shop login
+                  </Link>
                 </>
               )}
             </p>
@@ -422,7 +454,12 @@ export default function Auth({ mode }) {
                 </Link>
               </>
             ) : (
-              <>New here? <Link className="underline" to="/get-started">Create account</Link></>
+              <>
+                New here?{" "}
+                <Link className="underline" to="/get-started">
+                  Create account
+                </Link>
+              </>
             )}
           </p>
         </div>

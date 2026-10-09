@@ -8,7 +8,7 @@ const configured = Boolean(
   process.env.EMAIL_USER &&
   process.env.EMAIL_APP_PASSWORD &&
   !process.env.EMAIL_USER.includes("your-gmail") &&
-  !process.env.EMAIL_APP_PASSWORD.includes("your-16-character")
+  !process.env.EMAIL_APP_PASSWORD.includes("your-16-character"),
 );
 
 const transport = configured
@@ -42,7 +42,6 @@ export async function sendOtpEmail(to, otp) {
   return true;
 }
 
-
 export async function sendCustomerContactEmail(to, data) {
   if (!transport) return false;
   const subject = `Queue update | ${data.shopName || "Barber Queue"} | #${data.token || ""}`;
@@ -51,7 +50,7 @@ export async function sendCustomerContactEmail(to, data) {
     to,
     subject,
     text: `Dear ${data.customerName || "Customer"},\n\n${data.message}\n\nBooking details\nToken: #${data.token || "—"}\nShop: ${data.shopName || "—"}\nBarber: ${data.barber || "—"}\nService: ${data.services || "—"}\nStatus: ${data.status || "—"}\n\nRegards,\nBarber Queue Team\n\nThis is an automated notification. Please do not reply to this email.`,
-    html: `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#33281f"><h2 style="margin-bottom:8px">Queue update</h2><p>Dear ${data.customerName || "Customer"},</p><p>${String(data.message || "").replace(/\n/g,"<br>")}</p><h3>Booking details</h3><p><b>Token:</b> #${data.token || "—"}<br><b>Shop:</b> ${data.shopName || "—"}<br><b>Barber:</b> ${data.barber || "—"}<br><b>Service:</b> ${data.services || "—"}<br><b>Status:</b> ${data.status || "—"}</p><p>Regards,<br>Barber Queue Team</p><p style="font-size:12px;color:#777">This is an automated notification. Please do not reply to this email.</p></div>`,
+    html: `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#33281f"><h2 style="margin-bottom:8px">Queue update</h2><p>Dear ${data.customerName || "Customer"},</p><p>${String(data.message || "").replace(/\n/g, "<br>")}</p><h3>Booking details</h3><p><b>Token:</b> #${data.token || "—"}<br><b>Shop:</b> ${data.shopName || "—"}<br><b>Barber:</b> ${data.barber || "—"}<br><b>Service:</b> ${data.services || "—"}<br><b>Status:</b> ${data.status || "—"}</p><p>Regards,<br>Barber Queue Team</p><p style="font-size:12px;color:#777">This is an automated notification. Please do not reply to this email.</p></div>`,
   });
   return true;
 }

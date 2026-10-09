@@ -7,14 +7,19 @@ async function ensureColumn(table, column, ddl) {
     "SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=? LIMIT 1",
     [table, column],
   );
-  if (!r.length) await pool.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+  if (!r.length)
+    await pool.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
 }
 
 async function ensurePaymentStatusValue() {
   const [rows] = await pool.query(
     "SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='status' LIMIT 1",
   );
-  if (!rows.length || String(rows[0].COLUMN_TYPE).includes("'payment_submitted'")) return;
+  if (
+    !rows.length ||
+    String(rows[0].COLUMN_TYPE).includes("'payment_submitted'")
+  )
+    return;
   await pool.query(
     "ALTER TABLE payment_bookings MODIFY COLUMN status ENUM('created','paid','failed','cancelled','payment_submitted','accepted','rejected') NOT NULL DEFAULT 'payment_submitted'",
   );
@@ -27,14 +32,30 @@ export async function ensureSchema() {
   if (!cols.length) return;
 
   await ensureColumn("shops", "upi_qr_url", "TEXT NULL");
-  await ensureColumn("payment_bookings", "payment_method", "VARCHAR(30) NOT NULL DEFAULT 'upi_qr'");
+  await ensureColumn(
+    "payment_bookings",
+    "payment_method",
+    "VARCHAR(30) NOT NULL DEFAULT 'upi_qr'",
+  );
   await ensureColumn("payment_bookings", "payer_name", "VARCHAR(120) NULL");
-  await ensureColumn("payment_bookings", "payment_submitted_at", "DATETIME NULL");
-  await ensureColumn("payment_bookings", "payment_reference", "VARCHAR(120) NULL");
+  await ensureColumn(
+    "payment_bookings",
+    "payment_submitted_at",
+    "DATETIME NULL",
+  );
+  await ensureColumn(
+    "payment_bookings",
+    "payment_reference",
+    "VARCHAR(120) NULL",
+  );
   await ensureColumn("payment_bookings", "declined_until", "DATETIME NULL");
   await ensureColumn("payment_bookings", "queue_status", "VARCHAR(20) NULL");
   await ensureColumn("payment_bookings", "skipped_at", "DATETIME NULL");
-  await ensureColumn("payment_bookings", "skip_count", "INT NOT NULL DEFAULT 0");
+  await ensureColumn(
+    "payment_bookings",
+    "skip_count",
+    "INT NOT NULL DEFAULT 0",
+  );
   await ensureColumn("payment_bookings", "completed_at", "DATETIME NULL");
 
   await ensurePaymentStatusValue();

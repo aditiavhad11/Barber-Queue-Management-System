@@ -8,7 +8,15 @@ import { isShopOpenNow } from "../../utils/closedDays";
 
 export default function Shops() {
   const { shops } = useOwner();
-  const [f, setF] = useState({ q: "", dist: 0, min: "", max: "", rating: 0, open: false, svc: "" });
+  const [f, setF] = useState({
+    q: "",
+    dist: 0,
+    min: "",
+    max: "",
+    rating: 0,
+    open: false,
+    svc: "",
+  });
   const [userLoc, setUserLoc] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem("customerLocation") || "null");
@@ -45,7 +53,11 @@ export default function Shops() {
   }));
 
   const serviceOptions = useMemo(
-    () => [...new Map(shops.flatMap((s) => s.servicesList || []).map((s) => [s.id, s])).values()],
+    () => [
+      ...new Map(
+        shops.flatMap((s) => s.servicesList || []).map((s) => [s.id, s]),
+      ).values(),
+    ],
     [shops],
   );
 
@@ -53,10 +65,14 @@ export default function Shops() {
     .filter((s) => s.status === "approved" && s.active)
     .filter((s) => {
       const list = s.servicesList || [];
-      const prices = list.map((x) => Number(x.price)).filter((x) => Number.isFinite(x));
+      const prices = list
+        .map((x) => Number(x.price))
+        .filter((x) => Number.isFinite(x));
       const matchesDistance =
         !f.dist ||
-        (s.distanceKm !== null && s.distanceKm !== undefined && s.distanceKm <= Number(f.dist));
+        (s.distanceKm !== null &&
+          s.distanceKm !== undefined &&
+          s.distanceKm <= Number(f.dist));
 
       return (
         s.name.toLowerCase().includes(f.q.toLowerCase()) &&
@@ -94,19 +110,37 @@ export default function Shops() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-8 text-sm">
-        <select className="input min-w-0" value={f.dist} onChange={(e) => set("dist", Number(e.target.value))}>
+        <select
+          className="input min-w-0"
+          value={f.dist}
+          onChange={(e) => set("dist", Number(e.target.value))}
+        >
           <option value={0}>Any distance</option>
           {[1, 1.5, 2, 2.5, 3, 4, 5].map((d) => (
-            <option key={d} value={d}>Within {d} km</option>
+            <option key={d} value={d}>
+              Within {d} km
+            </option>
           ))}
         </select>
 
-        <select className="input" value={f.svc} onChange={(e) => set("svc", e.target.value)}>
+        <select
+          className="input"
+          value={f.svc}
+          onChange={(e) => set("svc", e.target.value)}
+        >
           <option value="">Any service</option>
-          {serviceOptions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          {serviceOptions.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
         </select>
 
-        <select className="input" value={f.rating} onChange={(e) => set("rating", Number(e.target.value))}>
+        <select
+          className="input"
+          value={f.rating}
+          onChange={(e) => set("rating", Number(e.target.value))}
+        >
           <option value={0}>Any rating</option>
           <option value={4}>4.0+</option>
           <option value={4.5}>4.5+</option>
@@ -118,7 +152,12 @@ export default function Shops() {
           min="0"
           placeholder="Min ₹"
           value={f.min}
-          onChange={(e) => set("min", e.target.value === "" ? "" : Math.max(0, Number(e.target.value)))}
+          onChange={(e) =>
+            set(
+              "min",
+              e.target.value === "" ? "" : Math.max(0, Number(e.target.value)),
+            )
+          }
         />
 
         <input
@@ -127,11 +166,21 @@ export default function Shops() {
           min="0"
           placeholder="Max ₹"
           value={f.max}
-          onChange={(e) => set("max", e.target.value === "" ? "" : Math.max(0, Number(e.target.value)))}
+          onChange={(e) =>
+            set(
+              "max",
+              e.target.value === "" ? "" : Math.max(0, Number(e.target.value)),
+            )
+          }
         />
 
         <label className="flex items-center gap-2">
-          <input type="checkbox" className="accent-[#B39A6A]" checked={f.open} onChange={(e) => set("open", e.target.checked)} />
+          <input
+            type="checkbox"
+            className="accent-[#B39A6A]"
+            checked={f.open}
+            onChange={(e) => set("open", e.target.checked)}
+          />
           Open now
         </label>
       </div>
@@ -144,12 +193,17 @@ export default function Shops() {
       ) : (
         <>
           <div className="grid grid-cols-2 gap-6">
-            {displayedRows.map((s) => <ShopCard key={s.id} shop={s} />)}
+            {displayedRows.map((s) => (
+              <ShopCard key={s.id} shop={s} />
+            ))}
           </div>
 
           {showMoreMode && displayedRows.length < rows.length && (
             <div className="flex justify-center mt-8">
-              <button className="btn" onClick={() => setVisibleCount((n) => n + 12)}>
+              <button
+                className="btn"
+                onClick={() => setVisibleCount((n) => n + 12)}
+              >
                 Show more
               </button>
             </div>

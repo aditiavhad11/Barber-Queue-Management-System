@@ -37,12 +37,11 @@ export const shopLoginController = async (req, res) => {
   }
 };
 
-
 export const listUsersController = async (req, res) => {
   try {
     const { pool } = await import("../config/db.js");
     const [rows] = await pool.query(
-      "SELECT id,name,email,role,status,created_at,updated_at FROM users WHERE role IN ('owner','customer') ORDER BY created_at DESC"
+      "SELECT id,name,email,role,status,created_at,updated_at FROM users WHERE role IN ('owner','customer') ORDER BY created_at DESC",
     );
     res.json(rows);
   } catch (e) {

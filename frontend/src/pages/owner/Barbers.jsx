@@ -1,31 +1,369 @@
 import { useState } from "react";
 import { Plus, Pencil, Trash2, Upload } from "lucide-react";
 import { useOwner } from "../../hooks/useOwnerStore";
-import { PageHead, StatusBadge, Modal, Empty, Rating } from "../../components/common/ui";
+import {
+  PageHead,
+  StatusBadge,
+  Modal,
+  Empty,
+  Rating,
+} from "../../components/common/ui";
 import { activeOf } from "../../utils/ownerEta";
 import { uploadImage, ACCEPTED, MAX_MB } from "../../services/upload";
-const blank = { name: "", gender: "Prefer not to say", experience: 0, specialization: "", services: [], status: "Available", photo: "" };
+const blank = {
+  name: "",
+  gender: "Prefer not to say",
+  experience: 0,
+  specialization: "",
+  services: [],
+  status: "Available",
+  photo: "",
+};
 export default function Barbers() {
-  const { barbers, services, queues, up, saveBarber } = useOwner(); const [form, setForm] = useState(null); const [view, setView] = useState(null); const [rm, setRm] = useState(null); const [avail, setAvail] = useState(null); const [uploading, setUploading] = useState(false);
+  const { barbers, services, queues, up, saveBarber } = useOwner();
+  const [form, setForm] = useState(null);
+  const [view, setView] = useState(null);
+  const [rm, setRm] = useState(null);
+  const [avail, setAvail] = useState(null);
+  const [uploading, setUploading] = useState(false);
   const qlen = (id) => activeOf(queues[id] || []).length;
-  const save = async () => { if (!form.name.trim()) return setForm({ ...form, err: "Name is required." }); if (!form.services.length) return setForm({ ...form, err: "Assign at least one service." });
-    try { await saveBarber(form); setForm(null); } catch (e) { setForm({ ...form, err: e.message }); }
+  const save = async () => {
+    if (!form.name.trim())
+      return setForm({ ...form, err: "Name is required." });
+    if (!form.services.length)
+      return setForm({ ...form, err: "Assign at least one service." });
+    try {
+      await saveBarber(form);
+      setForm(null);
+    } catch (e) {
+      setForm({ ...form, err: e.message });
+    }
   };
   const addPhoto = async (file) => {
-    if (!file) return; if (!ACCEPTED.includes(file.type)) return setForm({ ...form, err: "Only JPG, PNG and WEBP images are allowed." }); if (file.size > MAX_MB * 1048576) return setForm({ ...form, err: `Image must be smaller than ${MAX_MB} MB.` });
-    setUploading(true); try { const upImg = await uploadImage(file, "barber-queue/barbers"); setForm({ ...form, photo: upImg.url, err: "" }); } catch (e) { setForm({ ...form, err: e.message }); } finally { setUploading(false); }
+    if (!file) return;
+    if (!ACCEPTED.includes(file.type))
+      return setForm({
+        ...form,
+        err: "Only JPG, PNG and WEBP images are allowed.",
+      });
+    if (file.size > MAX_MB * 1048576)
+      return setForm({
+        ...form,
+        err: `Image must be smaller than ${MAX_MB} MB.`,
+      });
+    setUploading(true);
+    try {
+      const upImg = await uploadImage(file, "barber-queue/barbers");
+      setForm({ ...form, photo: upImg.url, err: "" });
+    } catch (e) {
+      setForm({ ...form, err: e.message });
+    } finally {
+      setUploading(false);
+    }
   };
-  const setStatus = (b, status, move) => { if (move) up("queues", (q) => { const mv = activeOf(q[b.id] || []).filter((e) => e.status === "Waiting"); return { ...q, [b.id]: (q[b.id] || []).filter((e) => !mv.includes(e)), [move]: [...(q[move] || []), ...mv] }; }); up("barbers", (l) => l.map((x) => (x.id === b.id ? { ...x, status } : x))); setAvail(null); };
-  const choose = (b, status) => (qlen(b.id) && status !== "Available" ? setAvail({ b, status, move: "" }) : setStatus(b, status));
-  const eligible = (b) => barbers.filter((x) => x.id !== b.id && x.status === "Available" && activeOf(queues[b.id] || []).filter((e) => e.status === "Waiting").every((e) => x.services.includes(e.service)));
-  return <><PageHead title="Barbers" sub="Manage barber profiles, profile photos, services and availability." action={<button className="btn" onClick={() => setForm({ ...blank })}><Plus size={16} />Add barber</button>} />
-    {!barbers.length ? <Empty title="No barbers" text="Add your first barber and assign their services." /> : <div className="grid md:grid-cols-2 gap-5">{barbers.map((b) => <div key={b.id} className="border border-khaki p-5"><div className="flex gap-4"><div className="w-14 h-14 rounded-full bg-olive text-cream grid place-items-center font-serif text-2xl overflow-hidden shrink-0">{b.photo ? <img src={b.photo} alt="" className="w-full h-full object-cover" /> : b.name[0]}</div><div className="flex-1 text-sm"><div className="flex justify-between"><b className="text-lg">{b.name}</b><StatusBadge s={b.status} /></div><p>{b.gender} · {b.experience} yrs {b.rating > 0 && <Rating v={b.rating} />}</p><p className="text-coffee/70">{b.specialization}</p></div></div>
-      <p className="text-sm mt-3">{b.services.map((id) => services.find((s) => s.id === id)?.name).filter(Boolean).join(", ") || "No services"}</p><p className="text-sm text-coffee/70">{qlen(b.id)} in queue</p>
-      <div className="flex flex-wrap items-center gap-3 mt-4 pt-3 border-t border-khaki"><select className="input !w-auto !py-1.5 text-sm" value={b.status} onChange={(e) => choose(b, e.target.value)}>{["Available", "On Break", "Unavailable"].map((s) => <option key={s}>{s}</option>)}</select><button className="text-sm underline" onClick={() => setView(b)}>View</button><button aria-label="Edit" onClick={() => setForm({ ...b })}><Pencil size={16} /></button><button aria-label="Remove" onClick={() => setRm(b)}><Trash2 size={16} /></button></div></div>)}</div>}
-    {form && <Modal title={form.id ? "Edit barber" : "Add barber"} onClose={() => setForm(null)} actions={<button className="btn" onClick={save}>Save</button>}><div className="space-y-3"><div className="flex items-center gap-4"><div className="w-20 h-20 rounded-full bg-card overflow-hidden grid place-items-center text-ivory font-serif text-3xl">{form.photo ? <img src={form.photo} alt="Barber profile" className="w-full h-full object-cover" /> : form.name?.[0] || "B"}</div><label className="btn-ghost cursor-pointer"><Upload size={16}/>{uploading ? "Uploading..." : form.photo ? "Replace profile photo" : "Upload profile photo"}<input type="file" hidden accept={ACCEPTED.join(",")} disabled={uploading} onChange={(e) => { addPhoto(e.target.files?.[0]); e.target.value = ""; }} /></label></div><input className="input" placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /><select className="input" value={form.gender} onChange={(e) => setForm({ ...form, gender: e.target.value })}>{["Male", "Female", "Prefer not to say"].map((g) => <option key={g}>{g}</option>)}</select><input className="input" type="number" min={0} placeholder="Years of experience" value={form.experience} onChange={(e) => setForm({ ...form, experience: +e.target.value })} /><input className="input" placeholder="Specialization" value={form.specialization} onChange={(e) => setForm({ ...form, specialization: e.target.value })} />
-      <div><div className="label mb-1">Services this barber provides</div>{services.map((s) => <label key={s.id} className="flex gap-2 py-0.5"><input type="checkbox" className="accent-[#B39A6A]" checked={form.services.includes(s.id)} onChange={(e) => setForm({ ...form, services: e.target.checked ? [...form.services, s.id] : form.services.filter((x) => x !== s.id) })} />{s.name}</label>)}</div>{form.err && <p className="text-rose text-sm">{form.err}</p>}</div></Modal>}
-    {view && <Modal title={view.name} onClose={() => setView(null)}><div className="flex gap-4 items-center mb-4">{view.photo ? <img src={view.photo} alt="" className="w-20 h-20 rounded-full object-cover" /> : <div className="w-20 h-20 rounded-full bg-olive text-cream grid place-items-center text-3xl">{view.name[0]}</div>}<div><p>{view.gender} · {view.experience} years</p><p>{view.specialization}</p></div></div><p>Services: {view.services.map((id) => services.find((s) => s.id === id)?.name).filter(Boolean).join(", ")}</p><p>Queue length: {qlen(view.id)}</p></Modal>}
-    {rm && <Modal title={`Remove ${rm.name}?`} onClose={() => setRm(null)} actions={qlen(rm.id) ? null : <button className="btn !bg-rose" onClick={() => { up("barbers", (l) => l.filter((b) => b.id !== rm.id)); setRm(null); }}>Remove</button>}>{qlen(rm.id) ? <p>{rm.name} still has {qlen(rm.id)} customer(s) in the queue. Reassign or finish the queue first, then remove.</p> : <p>This barber has no queue and will be removed.</p>}</Modal>}
-    {avail && <Modal title={`Set ${avail.b.name} to ${avail.status}?`} onClose={() => setAvail(null)} actions={<button className="btn" onClick={() => setStatus(avail.b, avail.status, avail.move || null)}>{avail.move ? "Reassign and apply" : "Continue existing queue"}</button>}><p>{avail.b.name} has {qlen(avail.b.id)} customer(s) in the queue. Nobody is removed automatically. New bookings with {avail.b.name} will be blocked.</p><label className="block">Handle affected waiting customers<select className="input mt-1" value={avail.move} onChange={(e) => setAvail({ ...avail, move: e.target.value })}><option value="">Keep them in {avail.b.name}'s queue</option>{eligible(avail.b).map((x) => <option key={x.id} value={x.id}>Reassign to {x.name}</option>)}</select></label></Modal>}
-  </>;
+  const setStatus = (b, status, move) => {
+    if (move)
+      up("queues", (q) => {
+        const mv = activeOf(q[b.id] || []).filter(
+          (e) => e.status === "Waiting",
+        );
+        return {
+          ...q,
+          [b.id]: (q[b.id] || []).filter((e) => !mv.includes(e)),
+          [move]: [...(q[move] || []), ...mv],
+        };
+      });
+    up("barbers", (l) => l.map((x) => (x.id === b.id ? { ...x, status } : x)));
+    setAvail(null);
+  };
+  const choose = (b, status) =>
+    qlen(b.id) && status !== "Available"
+      ? setAvail({ b, status, move: "" })
+      : setStatus(b, status);
+  const eligible = (b) =>
+    barbers.filter(
+      (x) =>
+        x.id !== b.id &&
+        x.status === "Available" &&
+        activeOf(queues[b.id] || [])
+          .filter((e) => e.status === "Waiting")
+          .every((e) => x.services.includes(e.service)),
+    );
+  return (
+    <>
+      <PageHead
+        title="Barbers"
+        sub="Manage barber profiles, profile photos, services and availability."
+        action={
+          <button className="btn" onClick={() => setForm({ ...blank })}>
+            <Plus size={16} />
+            Add barber
+          </button>
+        }
+      />
+      {!barbers.length ? (
+        <Empty
+          title="No barbers"
+          text="Add your first barber and assign their services."
+        />
+      ) : (
+        <div className="grid md:grid-cols-2 gap-5">
+          {barbers.map((b) => (
+            <div key={b.id} className="border border-khaki p-5">
+              <div className="flex gap-4">
+                <div className="w-14 h-14 rounded-full bg-olive text-cream grid place-items-center font-serif text-2xl overflow-hidden shrink-0">
+                  {b.photo ? (
+                    <img
+                      src={b.photo}
+                      alt=""
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    b.name[0]
+                  )}
+                </div>
+                <div className="flex-1 text-sm">
+                  <div className="flex justify-between">
+                    <b className="text-lg">{b.name}</b>
+                    <StatusBadge s={b.status} />
+                  </div>
+                  <p>
+                    {b.gender} · {b.experience} yrs{" "}
+                    {b.rating > 0 && <Rating v={b.rating} />}
+                  </p>
+                  <p className="text-coffee/70">{b.specialization}</p>
+                </div>
+              </div>
+              <p className="text-sm mt-3">
+                {b.services
+                  .map((id) => services.find((s) => s.id === id)?.name)
+                  .filter(Boolean)
+                  .join(", ") || "No services"}
+              </p>
+              <p className="text-sm text-coffee/70">{qlen(b.id)} in queue</p>
+              <div className="flex flex-wrap items-center gap-3 mt-4 pt-3 border-t border-khaki">
+                <select
+                  className="input !w-auto !py-1.5 text-sm"
+                  value={b.status}
+                  onChange={(e) => choose(b, e.target.value)}
+                >
+                  {["Available", "On Break", "Unavailable"].map((s) => (
+                    <option key={s}>{s}</option>
+                  ))}
+                </select>
+                <button
+                  className="text-sm underline"
+                  onClick={() => setView(b)}
+                >
+                  View
+                </button>
+                <button aria-label="Edit" onClick={() => setForm({ ...b })}>
+                  <Pencil size={16} />
+                </button>
+                <button aria-label="Remove" onClick={() => setRm(b)}>
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {form && (
+        <Modal
+          title={form.id ? "Edit barber" : "Add barber"}
+          onClose={() => setForm(null)}
+          actions={
+            <button className="btn" onClick={save}>
+              Save
+            </button>
+          }
+        >
+          <div className="space-y-3">
+            <div className="flex items-center gap-4">
+              <div className="w-20 h-20 rounded-full bg-card overflow-hidden grid place-items-center text-ivory font-serif text-3xl">
+                {form.photo ? (
+                  <img
+                    src={form.photo}
+                    alt="Barber profile"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  form.name?.[0] || "B"
+                )}
+              </div>
+              <label className="btn-ghost cursor-pointer">
+                <Upload size={16} />
+                {uploading
+                  ? "Uploading..."
+                  : form.photo
+                    ? "Replace profile photo"
+                    : "Upload profile photo"}
+                <input
+                  type="file"
+                  hidden
+                  accept={ACCEPTED.join(",")}
+                  disabled={uploading}
+                  onChange={(e) => {
+                    addPhoto(e.target.files?.[0]);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+            </div>
+            <input
+              className="input"
+              placeholder="Name"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+            />
+            <select
+              className="input"
+              value={form.gender}
+              onChange={(e) => setForm({ ...form, gender: e.target.value })}
+            >
+              {["Male", "Female", "Prefer not to say"].map((g) => (
+                <option key={g}>{g}</option>
+              ))}
+            </select>
+            <input
+              className="input"
+              type="number"
+              min={0}
+              placeholder="Years of experience"
+              value={form.experience}
+              onChange={(e) =>
+                setForm({ ...form, experience: +e.target.value })
+              }
+            />
+            <input
+              className="input"
+              placeholder="Specialization"
+              value={form.specialization}
+              onChange={(e) =>
+                setForm({ ...form, specialization: e.target.value })
+              }
+            />
+            <div>
+              <div className="label mb-1">Services this barber provides</div>
+              {services.map((s) => (
+                <label key={s.id} className="flex gap-2 py-0.5">
+                  <input
+                    type="checkbox"
+                    className="accent-[#B39A6A]"
+                    checked={form.services.includes(s.id)}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        services: e.target.checked
+                          ? [...form.services, s.id]
+                          : form.services.filter((x) => x !== s.id),
+                      })
+                    }
+                  />
+                  {s.name}
+                </label>
+              ))}
+            </div>
+            {form.err && <p className="text-rose text-sm">{form.err}</p>}
+          </div>
+        </Modal>
+      )}
+      {view && (
+        <Modal title={view.name} onClose={() => setView(null)}>
+          <div className="flex gap-4 items-center mb-4">
+            {view.photo ? (
+              <img
+                src={view.photo}
+                alt=""
+                className="w-20 h-20 rounded-full object-cover"
+              />
+            ) : (
+              <div className="w-20 h-20 rounded-full bg-olive text-cream grid place-items-center text-3xl">
+                {view.name[0]}
+              </div>
+            )}
+            <div>
+              <p>
+                {view.gender} · {view.experience} years
+              </p>
+              <p>{view.specialization}</p>
+            </div>
+          </div>
+          <p>
+            Services:{" "}
+            {view.services
+              .map((id) => services.find((s) => s.id === id)?.name)
+              .filter(Boolean)
+              .join(", ")}
+          </p>
+          <p>Queue length: {qlen(view.id)}</p>
+        </Modal>
+      )}
+      {rm && (
+        <Modal
+          title={`Remove ${rm.name}?`}
+          onClose={() => setRm(null)}
+          actions={
+            qlen(rm.id) ? null : (
+              <button
+                className="btn !bg-rose"
+                onClick={() => {
+                  up("barbers", (l) => l.filter((b) => b.id !== rm.id));
+                  setRm(null);
+                }}
+              >
+                Remove
+              </button>
+            )
+          }
+        >
+          {qlen(rm.id) ? (
+            <p>
+              {rm.name} still has {qlen(rm.id)} customer(s) in the queue.
+              Reassign or finish the queue first, then remove.
+            </p>
+          ) : (
+            <p>This barber has no queue and will be removed.</p>
+          )}
+        </Modal>
+      )}
+      {avail && (
+        <Modal
+          title={`Set ${avail.b.name} to ${avail.status}?`}
+          onClose={() => setAvail(null)}
+          actions={
+            <button
+              className="btn"
+              onClick={() =>
+                setStatus(avail.b, avail.status, avail.move || null)
+              }
+            >
+              {avail.move ? "Reassign and apply" : "Continue existing queue"}
+            </button>
+          }
+        >
+          <p>
+            {avail.b.name} has {qlen(avail.b.id)} customer(s) in the queue.
+            Nobody is removed automatically. New bookings with {avail.b.name}{" "}
+            will be blocked.
+          </p>
+          <label className="block">
+            Handle affected waiting customers
+            <select
+              className="input mt-1"
+              value={avail.move}
+              onChange={(e) => setAvail({ ...avail, move: e.target.value })}
+            >
+              <option value="">Keep them in {avail.b.name}'s queue</option>
+              {eligible(avail.b).map((x) => (
+                <option key={x.id} value={x.id}>
+                  Reassign to {x.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </Modal>
+      )}
+    </>
+  );
 }

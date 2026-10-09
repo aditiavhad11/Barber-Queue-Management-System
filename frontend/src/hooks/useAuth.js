@@ -11,8 +11,13 @@ const read = (key, fallback) => {
   }
 };
 const write = (key, value) => localStorage.setItem(key, JSON.stringify(value));
-const idFor = (email) => `user-${email.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
-const apiBase = () => (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
+const idFor = (email) =>
+  `user-${email
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")}`;
+const apiBase = () =>
+  (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
 
 async function apiRequest(path, options = {}) {
   const base = apiBase();
@@ -28,11 +33,18 @@ async function apiRequest(path, options = {}) {
 
 const SESSION_KEYS = ["token", "role", "shopId", "user", "ownerCurrentShopId"];
 export const clearSession = () => {
-  SESSION_KEYS.forEach((k) => { sessionStorage.removeItem(k); localStorage.removeItem(k); });
+  SESSION_KEYS.forEach((k) => {
+    sessionStorage.removeItem(k);
+    localStorage.removeItem(k);
+  });
   notify();
 };
 const readSessionUser = () => {
-  try { return JSON.parse(sessionStorage.getItem("user") || "null"); } catch { return null; }
+  try {
+    return JSON.parse(sessionStorage.getItem("user") || "null");
+  } catch {
+    return null;
+  }
 };
 // A real JWT carries its expiry. Mock tokens (offline mode) have no dots and never expire.
 const tokenValid = () => {
@@ -41,16 +53,21 @@ const tokenValid = () => {
   const parts = t.split(".");
   if (parts.length !== 3) return true;
   try {
-    const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
+    const payload = JSON.parse(
+      atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")),
+    );
     return !payload.exp || payload.exp * 1000 > Date.now();
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 };
 
 const saveSession = (result) => {
   sessionStorage.setItem("token", result.token);
   sessionStorage.setItem("role", result.user.role);
   sessionStorage.removeItem("shopId");
-  if (result.user.role === "owner") sessionStorage.removeItem("ownerCurrentShopId");
+  if (result.user.role === "owner")
+    sessionStorage.removeItem("ownerCurrentShopId");
   sessionStorage.setItem("user", JSON.stringify(result.user));
   notify();
   return result.user;
@@ -88,18 +105,30 @@ export const useAuth = () => ({
     const existing = accounts.find((a) => a.email === clean);
 
     if (role !== "admin" && existing && existing.role !== role) {
-      throw new Error("This email is already registered for another account type.");
+      throw new Error(
+        "This email is already registered for another account type.",
+      );
     }
-    if ((intent === "signin" || intent === "forgot") && !existing && role !== "admin") {
+    if (
+      (intent === "signin" || intent === "forgot") &&
+      !existing &&
+      role !== "admin"
+    ) {
       throw new Error("No account found. Create an account first.");
     }
     if (intent === "create" && existing) {
-      throw new Error("An account already exists for this email. Sign in instead.");
+      throw new Error(
+        "An account already exists for this email. Sign in instead.",
+      );
     }
     if (intent === "create" && password.length < 8) {
       throw new Error("Password must be at least 8 characters.");
     }
-    if (role === "admin" && import.meta.env.VITE_ADMIN_EMAIL && clean !== import.meta.env.VITE_ADMIN_EMAIL.trim().toLowerCase()) {
+    if (
+      role === "admin" &&
+      import.meta.env.VITE_ADMIN_EMAIL &&
+      clean !== import.meta.env.VITE_ADMIN_EMAIL.trim().toLowerCase()
+    ) {
       throw new Error("This email is not configured for admin access.");
     }
 
@@ -154,7 +183,11 @@ export const useAuth = () => ({
     const accounts = read(ACCOUNTS_KEY, []);
     let account = accounts.find((a) => a.email === clean);
 
-    if (role === "admin" && import.meta.env.VITE_ADMIN_EMAIL && clean !== import.meta.env.VITE_ADMIN_EMAIL.trim().toLowerCase()) {
+    if (
+      role === "admin" &&
+      import.meta.env.VITE_ADMIN_EMAIL &&
+      clean !== import.meta.env.VITE_ADMIN_EMAIL.trim().toLowerCase()
+    ) {
       throw new Error("This email is not configured for admin access.");
     }
 
@@ -188,7 +221,8 @@ export const useAuth = () => ({
           return null;
         }
       })();
-      if (existingShop) sessionStorage.setItem("ownerCurrentShopId", existingShop);
+      if (existingShop)
+        sessionStorage.setItem("ownerCurrentShopId", existingShop);
       else sessionStorage.removeItem("ownerCurrentShopId");
     }
 
@@ -213,9 +247,14 @@ export const useAuth = () => ({
     const account = accounts.find((a) => a.email === clean);
 
     if (!account) throw new Error("No account found with this email.");
-    if (account.role !== role) throw new Error("This account belongs to a different role.");
-    if (!account.password) throw new Error("Password login is not set up for this account. Please sign in using OTP.");
-    if (account.password !== password) throw new Error("Incorrect email or password.");
+    if (account.role !== role)
+      throw new Error("This account belongs to a different role.");
+    if (!account.password)
+      throw new Error(
+        "Password login is not set up for this account. Please sign in using OTP.",
+      );
+    if (account.password !== password)
+      throw new Error("Incorrect email or password.");
 
     sessionStorage.setItem("token", `mock-${account.id}`);
     sessionStorage.setItem("role", account.role);

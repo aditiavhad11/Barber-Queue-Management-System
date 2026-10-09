@@ -5,11 +5,22 @@ export function useLiveWait(key, minutes) {
   const [, tick] = useState(0);
   const k = `eta:${key}`;
   let rec = null;
-  try { rec = JSON.parse(localStorage.getItem(k) || "null"); } catch { rec = null; }
+  try {
+    rec = JSON.parse(localStorage.getItem(k) || "null");
+  } catch {
+    rec = null;
+  }
   if (!rec || rec.base !== minutes) {
     rec = { base: minutes, at: Date.now() };
-    try { localStorage.setItem(k, JSON.stringify(rec)); } catch { /* ignore */ }
+    try {
+      localStorage.setItem(k, JSON.stringify(rec));
+    } catch {
+      /* ignore */
+    }
   }
-  useEffect(() => { const id = setInterval(() => tick((n) => n + 1), 10000); return () => clearInterval(id); }, []);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 10000);
+    return () => clearInterval(id);
+  }, []);
   return Math.max(0, rec.base - Math.floor((Date.now() - rec.at) / 60000));
 }

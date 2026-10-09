@@ -6,21 +6,242 @@ import { useOwner } from "../../hooks/useOwnerStore";
 import { PageHead, StatusBadge, Modal } from "../../components/common/ui";
 import { activeOf } from "../../utils/ownerEta";
 export default function Dashboard() {
-  const { shop, payments, queues, barbers, notifications, finished, sessionRole, shopsLoading, shopLoadError } = useOwner(); const [showRejection, setShowRejection] = useState(false); const base = sessionRole === "shop" ? "/shop" : "/owner";
-  if (shopsLoading) return <><PageHead title="Loading dashboard" sub="Loading your shop from the database..." /><div className="border border-khaki p-8 max-w-xl"><p className="text-coffee/70">Please wait while we load your latest shop data.</p></div></>;
-  if (shopLoadError) return <><PageHead title="Could not load shop" sub="The database request failed." /><div className="border border-rose p-8 max-w-xl"><p className="text-rose">{shopLoadError}</p><button className="btn mt-5" onClick={() => window.location.reload()}>Retry</button></div></>;
-  if (!shop) return <><PageHead title="Welcome" sub="Your account does not have a shop yet." /><div className="border border-khaki p-8 max-w-xl"><Store className="text-gold" /><h2 className="text-4xl mt-3">Create your shop</h2><p className="text-coffee/70 mt-2">Add your shop details, photos, exact location, services and policies. Once an administrator approves it, customers can find you.</p><Link to={`${base}/create-shop`} className="btn mt-6"><PlusCircle size={16} />Add New Shop</Link><Link to="/owner/shops" className="btn-ghost mt-3 ml-2">My Shops</Link></div></>;
-  if (shop.status === "pending") return <><PageHead title="Dashboard" /><div className="border border-brass p-8 max-w-xl"><Hourglass className="text-gold" /><h2 className="text-4xl mt-3">Shop pending approval</h2><p className="text-coffee/70 mt-2">{shop.name} has been submitted. It is not publicly visible until approved. You can keep setting up barbers and services in the meantime.</p><Link to={`${base}/barbers`} className="btn mt-6">Set up barbers</Link></div></>;
-  if (shop.status === "rejected") return <><PageHead title="Dashboard" /><div className="border border-rose p-8 max-w-xl"><XCircle className="text-rose" /><h2 className="text-4xl mt-3">Shop rejected</h2><p className="text-coffee/70 mt-2">Admin requested changes before approval.</p><div className="flex flex-wrap gap-3 mt-6"><button className="btn-ghost" onClick={() => setShowRejection(true)}>View rejection reason</button><Link to="/owner/shops" className="btn">Review and resubmit</Link></div></div>{showRejection&&<Modal title="Admin rejection reason" onClose={() => setShowRejection(false)}><div className="border border-rose/30 bg-rose/10 p-4 rounded-md text-rose whitespace-pre-wrap">{shop.rejection || "Admin requested changes before approval."}</div></Modal>}</>;
-  const TODAY = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-  const today = payments.filter((p) => p.date === TODAY && p.status === "Successful");
-  const queued = Object.values(queues).reduce((t, q) => t + activeOf(q).length, 0);
-  const stats = [["Today's customers", today.length + queued], ["Today's earnings", "₹" + today.reduce((t, p) => t + p.amount, 0)], ["Active queues", Object.values(queues).filter((q) => activeOf(q).length).length], ["Available barbers", barbers.filter((b) => b.status === "Available").length + " / " + barbers.length]];
-  const pending = []; Object.values(queues).flat().filter((e) => e.status === "Your Turn").forEach((e) => pending.push(`${e.token} ${e.name} has been called and is waiting to start.`)); barbers.filter((b) => b.status !== "Available").forEach((b) => pending.push(`${b.name} is ${b.status.toLowerCase()}.`));
-  return <><PageHead title="Dashboard" sub={shop.name} action={<StatusBadge s={shop.isOpen ? "Open" : "Closed"} />} />
-    <img src="/img/dashboard-banner.svg" alt="" className="w-full h-28 md:h-40 object-cover rounded-md border border-khaki mb-6" />
-    <dl className="stat-grid grid grid-cols-2 md:grid-cols-4 gap-4">{stats.map(([k, v]) => <div key={k} className="p-4 md:p-6 bg-card border border-khaki rounded-md"><dt className="label">{k}</dt><dd className="font-serif text-4xl mt-1">{v}</dd></div>)}</dl>
-    <div className="grid md:grid-cols-3 gap-5 mt-6 items-stretch"><section className="ov-card h-full"><h2 className="text-2xl mb-3">Pending actions</h2>{pending.length ? pending.map((t) => <p key={t} className="py-2 border-b border-khaki text-sm">{t}</p>) : <p className="text-sm text-coffee/60">Nothing needs your attention.</p>}<Link to={`${base}/queue`} className="underline text-sm mt-3 inline-block">Open queue</Link></section>
-      <section className="ov-card h-full"><h2 className="text-2xl mb-3">Recent payments</h2>{payments.slice(0, 4).map((p) => <div key={p.id} className="flex justify-between py-2 border-b border-khaki text-sm"><span>{p.customer}<br /><span className="text-coffee/60">{p.service}</span></span><span className="text-right">₹{p.amount}<br /><StatusBadge s={p.status} /></span></div>)}</section>
-      <section className="ov-card h-full"><h2 className="text-2xl mb-3">Queue activity</h2>{notifications.slice(0, 4).map((n) => <p key={n.id} className="py-2 border-b border-khaki text-sm">{n.text}<br /><span className="text-xs text-coffee/60">{relativeTime(n.createdAt || n.time)}</span></p>)}<p className="text-xs text-coffee/60 mt-2">{finished} customers served today.</p></section></div></>;
+  const {
+    shop,
+    payments,
+    queues,
+    barbers,
+    notifications,
+    finished,
+    sessionRole,
+    shopsLoading,
+    shopLoadError,
+  } = useOwner();
+  const [showRejection, setShowRejection] = useState(false);
+  const base = sessionRole === "shop" ? "/shop" : "/owner";
+  if (shopsLoading)
+    return (
+      <>
+        <PageHead
+          title="Loading dashboard"
+          sub="Loading your shop from the database..."
+        />
+        <div className="border border-khaki p-8 max-w-xl">
+          <p className="text-coffee/70">
+            Please wait while we load your latest shop data.
+          </p>
+        </div>
+      </>
+    );
+  if (shopLoadError)
+    return (
+      <>
+        <PageHead
+          title="Could not load shop"
+          sub="The database request failed."
+        />
+        <div className="border border-rose p-8 max-w-xl">
+          <p className="text-rose">{shopLoadError}</p>
+          <button className="btn mt-5" onClick={() => window.location.reload()}>
+            Retry
+          </button>
+        </div>
+      </>
+    );
+  if (!shop)
+    return (
+      <>
+        <PageHead
+          title="Welcome"
+          sub="Your account does not have a shop yet."
+        />
+        <div className="border border-khaki p-8 max-w-xl">
+          <Store className="text-gold" />
+          <h2 className="text-4xl mt-3">Create your shop</h2>
+          <p className="text-coffee/70 mt-2">
+            Add your shop details, photos, exact location, services and
+            policies. Once an administrator approves it, customers can find you.
+          </p>
+          <Link to={`${base}/create-shop`} className="btn mt-6">
+            <PlusCircle size={16} />
+            Add New Shop
+          </Link>
+          <Link to="/owner/shops" className="btn-ghost mt-3 ml-2">
+            My Shops
+          </Link>
+        </div>
+      </>
+    );
+  if (shop.status === "pending")
+    return (
+      <>
+        <PageHead title="Dashboard" />
+        <div className="border border-brass p-8 max-w-xl">
+          <Hourglass className="text-gold" />
+          <h2 className="text-4xl mt-3">Shop pending approval</h2>
+          <p className="text-coffee/70 mt-2">
+            {shop.name} has been submitted. It is not publicly visible until
+            approved. You can keep setting up barbers and services in the
+            meantime.
+          </p>
+          <Link to={`${base}/barbers`} className="btn mt-6">
+            Set up barbers
+          </Link>
+        </div>
+      </>
+    );
+  if (shop.status === "rejected")
+    return (
+      <>
+        <PageHead title="Dashboard" />
+        <div className="border border-rose p-8 max-w-xl">
+          <XCircle className="text-rose" />
+          <h2 className="text-4xl mt-3">Shop rejected</h2>
+          <p className="text-coffee/70 mt-2">
+            Admin requested changes before approval.
+          </p>
+          <div className="flex flex-wrap gap-3 mt-6">
+            <button
+              className="btn-ghost"
+              onClick={() => setShowRejection(true)}
+            >
+              View rejection reason
+            </button>
+            <Link to="/owner/shops" className="btn">
+              Review and resubmit
+            </Link>
+          </div>
+        </div>
+        {showRejection && (
+          <Modal
+            title="Admin rejection reason"
+            onClose={() => setShowRejection(false)}
+          >
+            <div className="border border-rose/30 bg-rose/10 p-4 rounded-md text-rose whitespace-pre-wrap">
+              {shop.rejection || "Admin requested changes before approval."}
+            </div>
+          </Modal>
+        )}
+      </>
+    );
+  const TODAY = new Date().toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+  const today = payments.filter(
+    (p) => p.date === TODAY && p.status === "Successful",
+  );
+  const queued = Object.values(queues).reduce(
+    (t, q) => t + activeOf(q).length,
+    0,
+  );
+  const stats = [
+    ["Today's customers", today.length + queued],
+    ["Today's earnings", "₹" + today.reduce((t, p) => t + p.amount, 0)],
+    [
+      "Active queues",
+      Object.values(queues).filter((q) => activeOf(q).length).length,
+    ],
+    [
+      "Available barbers",
+      barbers.filter((b) => b.status === "Available").length +
+        " / " +
+        barbers.length,
+    ],
+  ];
+  const pending = [];
+  Object.values(queues)
+    .flat()
+    .filter((e) => e.status === "Your Turn")
+    .forEach((e) =>
+      pending.push(
+        `${e.token} ${e.name} has been called and is waiting to start.`,
+      ),
+    );
+  barbers
+    .filter((b) => b.status !== "Available")
+    .forEach((b) => pending.push(`${b.name} is ${b.status.toLowerCase()}.`));
+  return (
+    <>
+      <PageHead
+        title="Dashboard"
+        sub={shop.name}
+        action={<StatusBadge s={shop.isOpen ? "Open" : "Closed"} />}
+      />
+      <img
+        src="/img/dashboard-banner.svg"
+        alt=""
+        className="w-full h-28 md:h-40 object-cover rounded-md border border-khaki mb-6"
+      />
+      <dl className="stat-grid grid grid-cols-2 md:grid-cols-4 gap-4">
+        {stats.map(([k, v]) => (
+          <div
+            key={k}
+            className="p-4 md:p-6 bg-card border border-khaki rounded-md"
+          >
+            <dt className="label">{k}</dt>
+            <dd className="font-serif text-4xl mt-1">{v}</dd>
+          </div>
+        ))}
+      </dl>
+      <div className="grid md:grid-cols-3 gap-5 mt-6 items-stretch">
+        <section className="ov-card h-full">
+          <h2 className="text-2xl mb-3">Pending actions</h2>
+          {pending.length ? (
+            pending.map((t) => (
+              <p key={t} className="py-2 border-b border-khaki text-sm">
+                {t}
+              </p>
+            ))
+          ) : (
+            <p className="text-sm text-coffee/60">
+              Nothing needs your attention.
+            </p>
+          )}
+          <Link
+            to={`${base}/queue`}
+            className="underline text-sm mt-3 inline-block"
+          >
+            Open queue
+          </Link>
+        </section>
+        <section className="ov-card h-full">
+          <h2 className="text-2xl mb-3">Recent payments</h2>
+          {payments.slice(0, 4).map((p) => (
+            <div
+              key={p.id}
+              className="flex justify-between py-2 border-b border-khaki text-sm"
+            >
+              <span>
+                {p.customer}
+                <br />
+                <span className="text-coffee/60">{p.service}</span>
+              </span>
+              <span className="text-right">
+                ₹{p.amount}
+                <br />
+                <StatusBadge s={p.status} />
+              </span>
+            </div>
+          ))}
+        </section>
+        <section className="ov-card h-full">
+          <h2 className="text-2xl mb-3">Queue activity</h2>
+          {notifications.slice(0, 4).map((n) => (
+            <p key={n.id} className="py-2 border-b border-khaki text-sm">
+              {n.text}
+              <br />
+              <span className="text-xs text-coffee/60">
+                {relativeTime(n.createdAt || n.time)}
+              </span>
+            </p>
+          ))}
+          <p className="text-xs text-coffee/60 mt-2">
+            {finished} customers served today.
+          </p>
+        </section>
+      </div>
+    </>
+  );
 }
