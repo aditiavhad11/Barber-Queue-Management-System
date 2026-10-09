@@ -6,6 +6,7 @@ BARBER QUEUE - QUICK START
    If email SMTP is not configured, backend uses DEV_OTP=123456 for local testing.
 4. Make sure the barber_queue database/schema.sql has been imported.
 5. Run START.bat, or run backend and frontend separately.
+
 6. Frontend: http://localhost:5173
    Backend:  http://localhost:4000/api/health
 

@@ -59,7 +59,9 @@ app.use((err, _req, res, _next) => {
     .status(err.status || 500)
     .json({ message: err.message || "Server error." });
 });
+
 ensureSchema().catch((e) => console.error("Schema check failed:", e.message));
+
 app.listen(Number(process.env.PORT || 4000), () =>
   console.log(
     `Barber Queue API running on http://localhost:${process.env.PORT || 4000}`,
