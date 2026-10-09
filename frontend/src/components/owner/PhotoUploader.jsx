@@ -31,6 +31,7 @@ export default function PhotoUploader({ photos, onChange, error }) {
       n[0] = { ...n[0], primary: true };
     onChange(n);
   };
+
   return (
     <div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
