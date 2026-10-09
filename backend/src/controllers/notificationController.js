@@ -58,13 +58,16 @@ export async function bookingNotification(req, res) {
     amount,
     forSomeoneElse,
   } = req.body || {};
+
   if (!recipientEmail || !String(recipientEmail).includes("@"))
     return res
       .status(400)
       .json({ message: "A valid recipient email is required." });
+
   const subjectText = forSomeoneElse
     ? `${bookedBy || "A customer"} booked a slot for you at ${shopName || "Barber Queue"}.`
     : `Your booking #${token || ""} is confirmed.`;
+
   if (emailConfigured)
     await sendBookingNotificationEmail(recipientEmail, {
       recipientName,
@@ -76,6 +79,7 @@ export async function bookingNotification(req, res) {
       amount,
       forSomeoneElse,
     });
+
   res.json({ ok: true, emailSent: emailConfigured, message: subjectText });
 }
 
@@ -84,6 +88,7 @@ export async function listMyNotifications(req, res) {
   const { role, sub } = req.user;
   let sql;
   let params;
+
   if (role === "customer") {
     sql =
       "SELECT id,shop_id,tone,text,created_at FROM notifications WHERE user_id=? AND ref_id IS NOT NULL ORDER BY created_at DESC LIMIT 50";
