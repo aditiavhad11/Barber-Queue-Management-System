@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 750">
+<rect width="1200" height="750" fill="#E8E0D2"/>
+<rect x="170" y="210" width="860" height="360" rx="12" fill="#C9BBA5"/>
+<path d="M220 570V270h760v300" fill="none" stroke="#4E342E" stroke-width="18"/>
+<path d="M290 270v-90h620v90" fill="none" stroke="#4E342E" stroke-width="18"/>
+<circle cx="600" cy="390" r="90" fill="#FBF4E7" stroke="#4E342E" stroke-width="12"/>
+<path d="M545 390h110M600 335v110" stroke="#4E342E" stroke-width="12"/>
+<text x="600" y="650" text-anchor="middle" font-family="Georgia,serif" font-size="42" fill="#4E342E">Shop photo</text>
+</svg>

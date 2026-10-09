@@ -1,0 +1,45 @@
+@tailwind base;@tailwind components;@tailwind utilities;
+:root{color-scheme:light}
+body{@apply bg-mist text-coffee font-sans antialiased}
+h1,h2,h3{@apply font-serif tracking-tight text-ivory}
+.btn{@apply inline-flex items-center justify-center gap-2 px-6 py-3 text-sm font-medium bg-brass text-coffee rounded hover:bg-gold-light disabled:opacity-40 disabled:cursor-not-allowed}
+.btn[class*="bg-rose"]{@apply text-cream}
+.btn-ghost{@apply btn bg-transparent text-gold border border-gold hover:bg-gold hover:text-cream}
+.input{@apply w-full bg-field text-ivory border border-khaki px-4 py-3 rounded placeholder:text-hint focus:outline-none focus:border-gold}
+select.input{appearance:none;cursor:pointer;padding-right:2.5rem;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%232F4A3E' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right .9rem center}
+option{background:#FFFCF7;color:#2B211C}
+.label{@apply text-xs uppercase tracking-[.18em] text-soft}
+@layer base {
+  button, select, textarea, input { border-radius: .25rem; }
+  ::placeholder { color: #9B8E82; }
+}
+@layer components {
+  div[class~="border"][class*="border-khaki"],
+  section[class~="border"][class*="border-khaki"],
+  article[class~="border"][class*="border-khaki"],
+  div[class~="border"][class*="border-rose"],
+  section[class~="border"][class*="border-rose"],
+  article[class~="border"][class*="border-rose"],
+  div[class~="border"][class*="border-brass"],
+  section[class~="border"][class*="border-brass"],
+  article[class~="border"][class*="border-brass"] { border-radius: .375rem; }
+}
+
+@layer components {
+  .create-shop-form .create-intro { @apply border border-khaki bg-card p-5 md:p-6 rounded-md mb-2; }
+  .create-shop-form .create-card { @apply bg-card rounded-md p-5 md:p-6; }
+  .create-shop-form .service-row { @apply grid grid-cols-[minmax(0,1fr)_90px_90px_auto] gap-2 items-center p-2 border border-khaki rounded bg-field; }
+  .create-shop-form .service-row .input { @apply py-2.5; }
+  .create-shop-form h2 { @apply flex items-center gap-3; }
+  .create-shop-form h2 > span { @apply inline-flex items-center justify-center w-10 h-10 rounded bg-brass/15 text-base text-gold-light; }
+  @media (max-width: 640px) { .create-shop-form .service-row { @apply grid-cols-[minmax(0,1fr)_1fr_auto]; } .create-shop-form .service-row .input:nth-child(2) { grid-column: span 1; } }
+}
+
+/* Payment processing animation (rotating ring, no pulse) */
+.pay-spinner { display: inline-block; width: 22px; height: 22px; border-radius: 9999px; border: 3px solid rgba(47,74,62,.2); border-top-color: #2F4A3E; animation: pay-spin .8s linear infinite; flex: none; }
+.pay-spinner-lg { width: 44px; height: 44px; border-width: 4px; }
+@keyframes pay-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pay-spinner { animation-duration: 2.4s; } }
+/* Equal height, evenly aligned stat cells for shop overview */
+.stat-grid > div { display: flex; flex-direction: column; justify-content: space-between; min-height: 110px; }
+.ov-card { @apply bg-card border border-khaki rounded-md p-5 md:p-6 h-full; }
