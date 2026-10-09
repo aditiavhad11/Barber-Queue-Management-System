@@ -12,19 +12,60 @@ const parseJson = (value, fallback = {}) => {
   }
 };
 
+/**
+ * Bulk insert helper.
+ * - `sql` must end with `VALUES ?` (mysql2 expands the nested array into
+ *   multiple row tuples). This only works with `.query()`, NOT `.execute()`.
+ * - Rows are sent in chunks so one huge payload can never exceed
+ *   `max_allowed_packet`. For normal shops it is a single round-trip.
+ */
+const BULK_CHUNK_SIZE = 500;
+async function bulkInsert(conn, sql, rows) {
+  if (!rows.length) return;
+  for (let i = 0; i < rows.length; i += BULK_CHUNK_SIZE) {
+    await conn.query(sql, [rows.slice(i, i + BULK_CHUNK_SIZE)]);
+  }
+}
+
+const SHOP_PHOTO_INSERT =
+  "INSERT INTO shop_photos(id,shop_id,url,is_primary) VALUES ?";
+const SERVICE_INSERT =
+  "INSERT INTO services(id,shop_id,name,price,duration_minutes,enabled) VALUES ?";
+const BARBER_INSERT =
+  "INSERT INTO barbers(id,shop_id,name,gender,experience_years,specialization,status,photo_url) VALUES ?";
+const BARBER_SERVICE_INSERT =
+  "INSERT INTO barber_services(barber_id,service_id) VALUES ?";
+
+/**
+ * Single-statement replacement for the old
+ * `for (sid of services) INSERT IGNORE ... SELECT ?,id FROM services WHERE id=? AND shop_id=?`
+ * Still validates that every service belongs to the given shop and still
+ * silently skips unknown / foreign ids and duplicates (INSERT IGNORE).
+ */
+async function linkBarberServices(conn, barberId, shopId, serviceIds) {
+  if (!Array.isArray(serviceIds) || !serviceIds.length) return;
+  await conn.query(
+    "INSERT IGNORE INTO barber_services(barber_id,service_id) SELECT ?,id FROM services WHERE shop_id=? AND id IN (?)",
+    [barberId, shopId, serviceIds],
+  );
+}
+
 async function hydrateShop(row) {
   const [photos] = await pool.query(
     "SELECT id,url,is_primary FROM shop_photos WHERE shop_id=? ORDER BY is_primary DESC, created_at ASC",
     [row.id],
   );
+
   const [services] = await pool.query(
     "SELECT id,name,price,duration_minutes,enabled FROM services WHERE shop_id=? ORDER BY id ASC",
     [row.id],
   );
+
   const [barbers] = await pool.query(
     "SELECT id,name,gender,experience_years,specialization,rating,status,photo_url FROM barbers WHERE shop_id=? ORDER BY id ASC",
     [row.id],
   );
+
   let reviewsList = [];
   try {
     const [revs] = await pool.query(
@@ -49,7 +90,9 @@ async function hydrateShop(row) {
     /* table is created on server start; ignore if it is not there yet */
   }
   const barberIds = barbers.map((b) => b.id);
+
   let mappings = [];
+
   if (barberIds.length) {
     const [mapRows] = await pool.query(
       `SELECT barber_id,service_id FROM barber_services WHERE barber_id IN (${barberIds.map(() => "?").join(",")})`,
@@ -57,12 +100,16 @@ async function hydrateShop(row) {
     );
     mappings = mapRows;
   }
-  const servicesByBarber = Object.fromEntries(
-    barberIds.map((id) => [
-      id,
-      mappings.filter((m) => m.barber_id === id).map((m) => m.service_id),
-    ]),
-  );
+
+  // Group once (O(n)) instead of filtering the full list per barber (O(n*m)).
+  const servicesByBarber = {};
+  for (const id of barberIds) servicesByBarber[id] = [];
+  for (const m of mappings) {
+    if (servicesByBarber[m.barber_id]) {
+      servicesByBarber[m.barber_id].push(m.service_id);
+    }
+  }
+
   return {
     ...row,
     reviewsList,
@@ -133,7 +180,9 @@ export async function createShop(req, res) {
     return res
       .status(400)
       .json({ message: "Shop name, contact and address are required." });
+
   const id = crypto.randomUUID();
+
   // Legacy schema keeps these columns NOT NULL; credentials are generated internally and are not shown to owners.
   const internalLoginEmail = `shop-${id}@internal.invalid`;
   const hash = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 12);
@@ -162,35 +211,39 @@ export async function createShop(req, res) {
       ],
     );
 
-    for (const photo of b.photos || []) {
-      if (!photo?.url) continue;
-      await connection.query(
-        "INSERT INTO shop_photos(id,shop_id,url,is_primary) VALUES (?,?,?,?)",
-        [crypto.randomUUID(), id, photo.url, photo.primary ? 1 : 0],
-      );
-    }
+    // ---- photos (1 bulk insert) ----
+    const photoRows = (b.photos || [])
+      .filter((photo) => photo?.url)
+      .map((photo) => [
+        crypto.randomUUID(),
+        id,
+        photo.url,
+        photo.primary ? 1 : 0,
+      ]);
+    await bulkInsert(connection, SHOP_PHOTO_INSERT, photoRows);
 
+    // ---- services (1 bulk insert) ----
     const services = (b.services || []).filter(
       (x) => x?.name && Number(x.price) > 0 && Number(x.duration) > 0,
     );
     const serviceIds = [];
     const serviceIdMap = new Map();
-    for (const service of services) {
+    const serviceRows = services.map((service) => {
       const sid = crypto.randomUUID();
       serviceIds.push(sid);
       if (service.id) serviceIdMap.set(String(service.id), sid);
-      await connection.query(
-        "INSERT INTO services(id,shop_id,name,price,duration_minutes,enabled) VALUES (?,?,?,?,?,1)",
-        [
-          sid,
-          id,
-          service.name.trim(),
-          Number(service.price),
-          Number(service.duration),
-        ],
-      );
-    }
+      return [
+        sid,
+        id,
+        service.name.trim(),
+        Number(service.price),
+        Number(service.duration),
+        1,
+      ];
+    });
+    await bulkInsert(connection, SERVICE_INSERT, serviceRows);
 
+    // ---- barbers + barber_services (2 bulk inserts total) ----
     const barberCount = Math.max(1, Number(b.barberCount || b.barbers || 1));
     const barbers = Array.isArray(b.barbers)
       ? b.barbers
@@ -198,22 +251,23 @@ export async function createShop(req, res) {
           name: `Barber ${i + 1}`,
           services: serviceIds,
         }));
+
+    const barberRows = [];
+    const barberServiceRows = [];
     for (let i = 0; i < barbers.length; i += 1) {
       const barber = barbers[i] || {};
       const bid = crypto.randomUUID();
-      await connection.query(
-        "INSERT INTO barbers(id,shop_id,name,gender,experience_years,specialization,status,photo_url) VALUES (?,?,?,?,?,?,?,?)",
-        [
-          bid,
-          id,
-          barber.name?.trim() || `Barber ${i + 1}`,
-          String(barber.gender || "Prefer not to say"),
-          Math.max(0, Number(barber.experience) || 0),
-          String(barber.specialization || ""),
-          barber.status || "Available",
-          barber.photo || null,
-        ],
-      );
+      barberRows.push([
+        bid,
+        id,
+        barber.name?.trim() || `Barber ${i + 1}`,
+        String(barber.gender || "Prefer not to say"),
+        Math.max(0, Number(barber.experience) || 0),
+        String(barber.specialization || ""),
+        barber.status || "Available",
+        barber.photo || null,
+      ]);
+
       const requestedServices = Array.isArray(barber.services)
         ? barber.services
         : [];
@@ -221,15 +275,16 @@ export async function createShop(req, res) {
         .map((sid) => serviceIdMap.get(String(sid)))
         .filter(Boolean);
       const idsToUse = barberServiceIds.length ? barberServiceIds : serviceIds;
-      for (const sid of idsToUse)
-        await connection.query(
-          "INSERT INTO barber_services(barber_id,service_id) VALUES (?,?)",
-          [bid, sid],
-        );
+      for (const sid of idsToUse) barberServiceRows.push([bid, sid]);
     }
+    // barbers first, then mappings (FK order preserved)
+    await bulkInsert(connection, BARBER_INSERT, barberRows);
+    await bulkInsert(connection, BARBER_SERVICE_INSERT, barberServiceRows);
 
     await connection.commit();
+
     const [rows] = await pool.query("SELECT * FROM shops WHERE id=?", [id]);
+
     res.status(201).json(await hydrateShop(rows[0]));
   } catch (error) {
     await connection.rollback();
@@ -237,6 +292,7 @@ export async function createShop(req, res) {
       return res
         .status(409)
         .json({ message: "This shop login email is already in use." });
+
     throw error;
   } finally {
     connection.release();
@@ -246,10 +302,12 @@ export async function createShop(req, res) {
 export async function updateShop(req, res) {
   const b = req.body || {};
   const shopId = req.params.id;
+
   const [owned] = await pool.query(
     "SELECT id FROM shops WHERE id=? AND owner_id=? LIMIT 1",
     [shopId, req.user.sub],
   );
+
   if (!owned.length)
     return res
       .status(404)
@@ -257,30 +315,39 @@ export async function updateShop(req, res) {
 
   const fields = [];
   const values = [];
+
   const add = (column, value) => {
     fields.push(`${column}=?`);
     values.push(value);
   };
 
   if (b.name !== undefined) add("name", String(b.name).trim());
+
   if (b.description !== undefined)
     add("description", String(b.description || ""));
+
   if (b.contact !== undefined) add("contact", String(b.contact).trim());
+
   if (b.address !== undefined) add("address", String(b.address).trim());
+
   if (b.location !== undefined) {
     add("latitude", b.location?.lat ?? null);
     add("longitude", b.location?.lng ?? null);
   }
+
   if (b.hours !== undefined) {
     add("hours_open", b.hours?.open || "09:00");
     add("hours_close", b.hours?.close || "21:00");
   }
+
   if (b.availability !== undefined)
     add("availability_json", JSON.stringify(b.availability || {}));
+
   if (b.policy !== undefined)
     add("policies_json", JSON.stringify(b.policy || {}));
 
   const connection = await pool.getConnection();
+
   try {
     await connection.beginTransaction();
     if (fields.length) {
@@ -295,13 +362,15 @@ export async function updateShop(req, res) {
       await connection.query("DELETE FROM shop_photos WHERE shop_id=?", [
         shopId,
       ]);
-      for (const photo of b.photos) {
-        if (!photo?.url) continue;
-        await connection.query(
-          "INSERT INTO shop_photos(id,shop_id,url,is_primary) VALUES (?,?,?,?)",
-          [crypto.randomUUID(), shopId, photo.url, photo.primary ? 1 : 0],
-        );
-      }
+      const photoRows = b.photos
+        .filter((photo) => photo?.url)
+        .map((photo) => [
+          crypto.randomUUID(),
+          shopId,
+          photo.url,
+          photo.primary ? 1 : 0,
+        ]);
+      await bulkInsert(connection, SHOP_PHOTO_INSERT, photoRows);
     }
 
     await connection.commit();
@@ -385,11 +454,9 @@ export async function createService(req, res) {
     !Number.isFinite(duration) ||
     duration <= 0
   ) {
-    return res
-      .status(400)
-      .json({
-        message: "Enter a service name, positive price and positive duration.",
-      });
+    return res.status(400).json({
+      message: "Enter a service name, positive price and positive duration.",
+    });
   }
   const [existing] = await pool.query(
     "SELECT id,name,price,duration_minutes,enabled FROM services WHERE shop_id=? AND LOWER(name)=LOWER(?) LIMIT 1",
@@ -409,31 +476,35 @@ export async function createService(req, res) {
     });
   }
   const id = crypto.randomUUID();
+
   await pool.query(
     "INSERT INTO services(id,shop_id,name,price,duration_minutes,enabled) VALUES (?,?,?,?,?,1)",
     [id, shopId, name, price, duration],
   );
-  res
-    .status(201)
-    .json({
-      existing: false,
-      service: { id, shopId, name, price, duration, enabled: true },
-    });
+
+  res.status(201).json({
+    existing: false,
+    service: { id, shopId, name, price, duration, enabled: true },
+  });
 }
 
 export async function createBarber(req, res) {
   const { id: shopId } = req.params;
+
   const [owned] = await pool.query(
     "SELECT id FROM shops WHERE id=? AND (owner_id=? OR id=?) LIMIT 1",
     [shopId, req.user.sub, req.user.role === "shop" ? shopId : "__no_shop__"],
   );
+
   if (!owned.length)
     return res
       .status(404)
       .json({ message: "Shop not found or not owned by this account." });
+
   const b = req.body || {};
   if (!String(b.name || "").trim())
     return res.status(400).json({ message: "Barber name is required." });
+
   const id = crypto.randomUUID();
   const connection = await pool.getConnection();
   try {
@@ -453,11 +524,14 @@ export async function createBarber(req, res) {
         b.photo ? String(b.photo) : null,
       ],
     );
-    for (const sid of Array.isArray(b.services) ? b.services : [])
-      await connection.query(
-        "INSERT IGNORE INTO barber_services(barber_id,service_id) SELECT ?,id FROM services WHERE id=? AND shop_id=?",
-        [id, sid, shopId],
-      );
+    // one statement instead of one INSERT per service
+    await linkBarberServices(
+      connection,
+      id,
+      shopId,
+      Array.isArray(b.services) ? b.services : [],
+    );
+
     await connection.commit();
   } catch (error) {
     await connection.rollback();
@@ -521,11 +595,8 @@ export async function updateBarber(req, res) {
       await connection.query("DELETE FROM barber_services WHERE barber_id=?", [
         barberId,
       ]);
-      for (const sid of b.services)
-        await connection.query(
-          "INSERT IGNORE INTO barber_services(barber_id,service_id) SELECT ?,id FROM services WHERE id=? AND shop_id=?",
-          [barberId, sid, shopId],
-        );
+      // one statement instead of one INSERT per service
+      await linkBarberServices(connection, barberId, shopId, b.services);
     }
     await connection.commit();
   } catch (error) {
