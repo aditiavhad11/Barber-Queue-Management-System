@@ -59,14 +59,14 @@ export async function acceptBooking(req, res) {
     return res
       .status(404)
       .json({ message: "Booking not found for this shop." });
+
   if (booking.status === "accepted")
     return res.json({ booking, alreadyAccepted: true });
+
   if (booking.status !== "payment_submitted") {
-    return res
-      .status(409)
-      .json({
-        message: `This booking is ${booking.status} and cannot be accepted.`,
-      });
+    return res.status(409).json({
+      message: `This booking is ${booking.status} and cannot be accepted.`,
+    });
   }
 
   const nextFree = async () => {
@@ -145,11 +145,9 @@ export async function declineBooking(req, res) {
   if (booking.status === "rejected")
     return res.json({ booking, alreadyDeclined: true });
   if (booking.status !== "payment_submitted") {
-    return res
-      .status(409)
-      .json({
-        message: `This booking is ${booking.status} and cannot be declined.`,
-      });
+    return res.status(409).json({
+      message: `This booking is ${booking.status} and cannot be declined.`,
+    });
   }
 
   const reason =
@@ -244,11 +242,9 @@ export async function deleteBookingHistory(req, res) {
     res.json({ ok: true, id: rows[0].id });
   } catch (error) {
     await connection.rollback().catch(() => {});
-    res
-      .status(error.status || 500)
-      .json({
-        message: error.message || "Could not delete the payment record.",
-      });
+    res.status(error.status || 500).json({
+      message: error.message || "Could not delete the payment record.",
+    });
   } finally {
     connection.release();
   }
