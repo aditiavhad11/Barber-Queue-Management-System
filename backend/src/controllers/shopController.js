@@ -113,6 +113,7 @@ async function hydrateShop(row) {
   return {
     ...row,
     reviewsList,
+    coOwners,
     ownerId: row.owner_id,
     loginEmail: row.login_email,
     rejection: row.rejection_reason || "",
@@ -281,6 +282,34 @@ export async function createShop(req, res) {
     await bulkInsert(connection, BARBER_INSERT, barberRows);
     await bulkInsert(connection, BARBER_SERVICE_INSERT, barberServiceRows);
 
+    const coOwners = Array.isArray(b.coOwners)
+      ? b.coOwners
+      : b.coOwner
+        ? [b.coOwner]
+        : [];
+    for (const co of coOwners) {
+      if (!co?.name?.trim() || !co?.email?.trim()) continue;
+      const coId = crypto.randomUUID();
+      const coHash = await bcrypt.hash(
+        String(co.password || "barber1234"),
+        10,
+      );
+      await connection.query(
+        "INSERT INTO shop_co_owners(id,shop_id,name,email,phone,title,password_hash,permissions_json,status) VALUES (?,?,?,?,?,?,?,?,?)",
+        [
+          coId,
+          id,
+          String(co.name).trim(),
+          String(co.email).trim().toLowerCase(),
+          String(co.phone || "").trim(),
+          String(co.title || "Co-Owner").trim(),
+          coHash,
+          JSON.stringify(co.permissions || {}),
+          co.status || "active",
+        ],
+      );
+    }
+
     await connection.commit();
 
     const [rows] = await pool.query("SELECT * FROM shops WHERE id=?", [id]);
@@ -436,9 +465,12 @@ export async function listAdmin(_req, res) {
 
 export async function createService(req, res) {
   const { id: shopId } = req.params;
+  const isShopOrCoOwner =
+    req.user.role === "shop" || req.user.role === "co_owner";
+  const shopIdFromUser = req.user.shopId || req.user.sub;
   const [owned] = await pool.query(
-    "SELECT id FROM shops WHERE id=? AND owner_id=? LIMIT 1",
-    [shopId, req.user.sub],
+    "SELECT id FROM shops WHERE id=? AND (owner_id=? OR id=?) LIMIT 1",
+    [shopId, req.user.sub, isShopOrCoOwner ? shopIdFromUser : "__no_shop__"],
   );
   if (!owned.length)
     return res
@@ -493,7 +525,7 @@ export async function createBarber(req, res) {
 
   const [owned] = await pool.query(
     "SELECT id FROM shops WHERE id=? AND (owner_id=? OR id=?) LIMIT 1",
-    [shopId, req.user.sub, req.user.role === "shop" ? shopId : "__no_shop__"],
+    [shopId, req.user.sub, isShopOrCoOwner ? shopIdFromUser : "__no_shop__"],
   );
 
   if (!owned.length)
@@ -548,9 +580,12 @@ export async function createBarber(req, res) {
 
 export async function updateBarber(req, res) {
   const { id: shopId, barberId } = req.params;
+  const isShopOrCoOwner =
+    req.user.role === "shop" || req.user.role === "co_owner";
+  const shopIdFromUser = req.user.shopId || req.user.sub;
   const [owned] = await pool.query(
     "SELECT id FROM shops WHERE id=? AND (owner_id=? OR id=?) LIMIT 1",
-    [shopId, req.user.sub, req.user.role === "shop" ? shopId : "__no_shop__"],
+    [shopId, req.user.sub, isShopOrCoOwner ? shopIdFromUser : "__no_shop__"],
   );
   if (!owned.length)
     return res
@@ -614,4 +649,214 @@ export async function updateBarber(req, res) {
     [barberId],
   );
   res.json({ barber: { ...rows[0], services: maps.map((x) => x.service_id) } });
+}
+
+export async function listCoOwners(req, res) {
+  const { id: shopId } = req.params;
+  const [owned] = await pool.query(
+    "SELECT id FROM shops WHERE id=? AND owner_id=? LIMIT 1",
+    [shopId, req.user.sub],
+  );
+  if (!owned.length) {
+    return res
+      .status(404)
+      .json({ message: "Shop not found or not owned by this account." });
+  }
+  const [rows] = await pool.query(
+    "SELECT id, shop_id, name, email, phone, title, permissions_json, status, created_at, updated_at FROM shop_co_owners WHERE shop_id=? ORDER BY created_at ASC",
+    [shopId],
+  );
+  res.json(
+    rows.map((c) => ({
+      id: c.id,
+      shopId: c.shop_id,
+      name: c.name,
+      email: c.email,
+      phone: c.phone || "",
+      title: c.title || "Co-Owner",
+      permissions: parseJson(c.permissions_json, {}),
+      status: c.status || "active",
+      createdAt: c.created_at,
+      updatedAt: c.updated_at,
+    })),
+  );
+}
+
+export async function createCoOwner(req, res) {
+  const { id: shopId } = req.params;
+  const [owned] = await pool.query(
+    "SELECT id FROM shops WHERE id=? AND owner_id=? LIMIT 1",
+    [shopId, req.user.sub],
+  );
+  if (!owned.length) {
+    return res
+      .status(404)
+      .json({ message: "Shop not found or not owned by this account." });
+  }
+
+  const b = req.body || {};
+  const name = String(b.name || "").trim();
+  const email = String(b.email || "").trim().toLowerCase();
+  const phone = String(b.phone || "").trim();
+  const title = String(b.title || "Co-Owner").trim();
+  const password = String(b.password || "");
+  const permissions =
+    typeof b.permissions === "object" && b.permissions !== null
+      ? b.permissions
+      : {};
+
+  if (!name || !email || !phone) {
+    return res
+      .status(400)
+      .json({ message: "Co-Owner name, email, and phone are required." });
+  }
+  if (!password || password.length < 6) {
+    return res
+      .status(400)
+      .json({ message: "Password must be at least 6 characters." });
+  }
+
+  const [existing] = await pool.query(
+    "SELECT id FROM shop_co_owners WHERE shop_id=? AND LOWER(email)=? LIMIT 1",
+    [shopId, email],
+  );
+  if (existing.length) {
+    return res.status(409).json({
+      message: "A co-owner with this email is already assigned to this shop.",
+    });
+  }
+
+  const id = crypto.randomUUID();
+  const passwordHash = await bcrypt.hash(password, 10);
+  await pool.query(
+    "INSERT INTO shop_co_owners(id, shop_id, name, email, phone, title, password_hash, permissions_json, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')",
+    [
+      id,
+      shopId,
+      name,
+      email,
+      phone,
+      title,
+      passwordHash,
+      JSON.stringify(permissions),
+    ],
+  );
+
+  const [rows] = await pool.query(
+    "SELECT id, shop_id, name, email, phone, title, permissions_json, status, created_at, updated_at FROM shop_co_owners WHERE id=? LIMIT 1",
+    [id],
+  );
+  res.status(201).json({
+    coOwner: {
+      id: rows[0].id,
+      shopId: rows[0].shop_id,
+      name: rows[0].name,
+      email: rows[0].email,
+      phone: rows[0].phone || "",
+      title: rows[0].title || "Co-Owner",
+      permissions: parseJson(rows[0].permissions_json, {}),
+      status: rows[0].status,
+      createdAt: rows[0].created_at,
+      updatedAt: rows[0].updated_at,
+    },
+  });
+}
+
+export async function updateCoOwner(req, res) {
+  const { id: shopId, coOwnerId } = req.params;
+  const [owned] = await pool.query(
+    "SELECT id FROM shops WHERE id=? AND owner_id=? LIMIT 1",
+    [shopId, req.user.sub],
+  );
+  if (!owned.length) {
+    return res
+      .status(404)
+      .json({ message: "Shop not found or not owned by this account." });
+  }
+
+  const b = req.body || {};
+  const fields = [];
+  const values = [];
+  if (b.name !== undefined) {
+    fields.push("name=?");
+    values.push(String(b.name).trim());
+  }
+  if (b.email !== undefined) {
+    fields.push("email=?");
+    values.push(String(b.email).trim().toLowerCase());
+  }
+  if (b.phone !== undefined) {
+    fields.push("phone=?");
+    values.push(String(b.phone).trim());
+  }
+  if (b.title !== undefined) {
+    fields.push("title=?");
+    values.push(String(b.title).trim());
+  }
+  if (b.status !== undefined && ["active", "inactive"].includes(b.status)) {
+    fields.push("status=?");
+    values.push(b.status);
+  }
+  if (b.permissions !== undefined) {
+    fields.push("permissions_json=?");
+    values.push(JSON.stringify(b.permissions));
+  }
+  if (b.password) {
+    const hash = await bcrypt.hash(String(b.password), 10);
+    fields.push("password_hash=?");
+    values.push(hash);
+  }
+
+  if (fields.length) {
+    values.push(coOwnerId, shopId);
+    await pool.query(
+      `UPDATE shop_co_owners SET ${fields.join(", ")} WHERE id=? AND shop_id=?`,
+      values,
+    );
+  }
+
+  const [rows] = await pool.query(
+    "SELECT id, shop_id, name, email, phone, title, permissions_json, status, created_at, updated_at FROM shop_co_owners WHERE id=? LIMIT 1",
+    [coOwnerId],
+  );
+  if (!rows.length) {
+    return res.status(404).json({ message: "Co-owner not found." });
+  }
+
+  res.json({
+    coOwner: {
+      id: rows[0].id,
+      shopId: rows[0].shop_id,
+      name: rows[0].name,
+      email: rows[0].email,
+      phone: rows[0].phone || "",
+      title: rows[0].title || "Co-Owner",
+      permissions: parseJson(rows[0].permissions_json, {}),
+      status: rows[0].status,
+      createdAt: rows[0].created_at,
+      updatedAt: rows[0].updated_at,
+    },
+  });
+}
+
+export async function deleteCoOwner(req, res) {
+  const { id: shopId, coOwnerId } = req.params;
+  const [owned] = await pool.query(
+    "SELECT id FROM shops WHERE id=? AND owner_id=? LIMIT 1",
+    [shopId, req.user.sub],
+  );
+  if (!owned.length) {
+    return res
+      .status(404)
+      .json({ message: "Shop not found or not owned by this account." });
+  }
+
+  const [result] = await pool.query(
+    "DELETE FROM shop_co_owners WHERE id=? AND shop_id=?",
+    [coOwnerId, shopId],
+  );
+  if (!result.affectedRows) {
+    return res.status(404).json({ message: "Co-owner not found." });
+  }
+  res.json({ ok: true });
 }

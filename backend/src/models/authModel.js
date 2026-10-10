@@ -5,9 +5,18 @@ import { pool } from "../config/db.js";
 import { sendOtpEmail, emailConfigured } from "../config/mail.js";
 
 const sign = (user) =>
-  jwt.sign({ sub: user.id, role: user.role }, process.env.JWT_SECRET, {
-    expiresIn: "7d",
-  });
+  jwt.sign(
+    {
+      sub: user.id,
+      role: user.role,
+      ...(user.shopId ? { shopId: user.shopId } : {}),
+      ...(user.permissions ? { permissions: user.permissions } : {}),
+    },
+    process.env.JWT_SECRET,
+    {
+      expiresIn: "7d",
+    },
+  );
 
 const cleanEmail = (email) =>
   String(email || "")
@@ -70,10 +79,12 @@ export async function requestOtp({
       throw new Error("Password must be at least 8 characters.");
   }
 
-  // When SMTP is not configured we use the dev OTP as the REAL code, so the code shown to the
-  // developer is the same code that verifyOtp checks (before, a random code was stored while
-  // 123456 was shown, so verification always failed).
-  const useDevCode = !emailConfigured && process.env.NODE_ENV !== "production";
+  // When SMTP is not configured or for local test domains (e.g. admin@barberqueue.local),
+  // use the dev OTP so developers can sign in without needing an external mailbox.
+  const isLocalDomain = clean.endsWith(".local") || clean.endsWith(".test");
+  const useDevCode =
+    (!emailConfigured || isLocalDomain) && process.env.NODE_ENV !== "production";
+
   if (!emailConfigured && !useDevCode) {
     throw new Error(
       "Email service is not configured on the server. Set EMAIL_HOST, EMAIL_USER and EMAIL_APP_PASSWORD.",
@@ -89,6 +100,10 @@ export async function requestOtp({
     "INSERT INTO otp_codes(email,role,code_hash,expires_at) VALUES (?,?,?,?)",
     [clean, role, await bcrypt.hash(code, 10), expires],
   );
+
+  if (process.env.NODE_ENV !== "production") {
+    console.log(`[AUTH DEV] OTP for ${clean} (${role}): ${code}`);
+  }
 
   if (useDevCode) {
     return { ok: true, devOtp: code, emailConfigured: false };
@@ -240,25 +255,87 @@ export async function shopLogin({ email, password }) {
   );
 
   if (
-    !rows.length ||
-    !(await bcrypt.compare(password, rows[0].login_password_hash))
+    rows.length &&
+    (await bcrypt.compare(password, rows[0].login_password_hash))
   ) {
-    throw new Error("Invalid shop email or password.");
+    const shop = rows[0];
+    if (shop.status !== "approved") {
+      throw new Error(`This shop is ${shop.status} and cannot be accessed.`);
+    }
+
+    return {
+      token: sign({
+        id: shop.id,
+        name: shop.name,
+        role: "shop",
+        shopId: shop.id,
+        permissions: { all: true },
+      }),
+      user: {
+        id: shop.id,
+        name: shop.name,
+        role: "shop",
+        shopId: shop.id,
+        ownerId: shop.owner_id,
+        permissions: { all: true },
+      },
+    };
   }
 
-  const shop = rows[0];
-  if (shop.status !== "approved") {
-    throw new Error(`This shop is ${shop.status} and cannot be accessed.`);
+  // Check co-owners
+  const [coRows] = await pool.query(
+    `SELECT c.id, c.shop_id, c.name, c.email, c.phone, c.title, c.password_hash, c.permissions_json, c.status AS co_status,
+            s.name AS shop_name, s.owner_id, s.status AS shop_status, s.active AS shop_active
+     FROM shop_co_owners c
+     JOIN shops s ON s.id = c.shop_id
+     WHERE LOWER(c.email)=? LIMIT 1`,
+    [clean],
+  );
+
+  if (
+    coRows.length &&
+    (await bcrypt.compare(password, coRows[0].password_hash))
+  ) {
+    const co = coRows[0];
+    if (co.co_status !== "active") {
+      throw new Error("This co-owner account is currently inactive. Contact the shop owner.");
+    }
+    if (co.shop_status !== "approved") {
+      throw new Error(`This shop is ${co.shop_status} and cannot be accessed.`);
+    }
+
+    let perms = {};
+    try {
+      perms =
+        typeof co.permissions_json === "object" && co.permissions_json !== null
+          ? co.permissions_json
+          : JSON.parse(co.permissions_json || "{}");
+    } catch {
+      perms = {};
+    }
+
+    return {
+      token: sign({
+        id: co.id,
+        name: co.name,
+        role: "co_owner",
+        shopId: co.shop_id,
+        permissions: perms,
+      }),
+      user: {
+        id: co.id,
+        name: co.name,
+        email: co.email,
+        phone: co.phone,
+        role: "co_owner",
+        title: co.title || "Co-Owner",
+        shopId: co.shop_id,
+        shopName: co.shop_name,
+        ownerId: co.owner_id,
+        permissions: perms,
+      },
+    };
   }
 
-  return {
-    token: sign({ id: shop.id, name: shop.name, role: "shop" }),
-    user: {
-      id: shop.id,
-      name: shop.name,
-      role: "shop",
-      shopId: shop.id,
-      ownerId: shop.owner_id,
-    },
-  };
+  throw new Error("Invalid shop or co-owner email or password.");
 }

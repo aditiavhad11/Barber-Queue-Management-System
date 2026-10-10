@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useOwner } from "../../hooks/useOwnerStore";
 import { PageHead, StatusBadge, Modal } from "../../components/common/ui";
 import { activeOf } from "../../utils/ownerEta";
+import { getTemporaryClosure } from "../../utils/closedDays";
 export default function Dashboard() {
   const {
     shop,
@@ -162,12 +163,23 @@ export default function Dashboard() {
   barbers
     .filter((b) => b.status !== "Available")
     .forEach((b) => pending.push(`${b.name} is ${b.status.toLowerCase()}.`));
+  const closure = getTemporaryClosure(shop);
   return (
     <>
       <PageHead
         title="Dashboard"
         sub={shop.name}
-        action={<StatusBadge s={shop.isOpen ? "Open" : "Closed"} />}
+        action={
+          <StatusBadge
+            s={
+              closure.isClosed
+                ? "Emergency Closed"
+                : shop.isOpen
+                  ? "Open"
+                  : "Closed"
+            }
+          />
+        }
       />
       <img
         src="/img/dashboard-banner.svg"

@@ -74,7 +74,7 @@ async function validateSelection(
   { shopId, barberId, serviceIds, customerId },
 ) {
   const [shops] = await connection.query(
-    "SELECT id,name,upi_qr_url FROM shops WHERE id=? AND status='approved' AND active=1 LIMIT 1",
+    "SELECT id,name,upi_qr_url,availability_json FROM shops WHERE id=? AND status='approved' AND active=1 LIMIT 1",
     [shopId],
   );
   if (!shops.length)
@@ -82,6 +82,28 @@ async function validateSelection(
       new Error("This shop is not accepting bookings right now."),
       { status: 404 },
     );
+
+  const avail =
+    typeof shops[0].availability_json === "string"
+      ? JSON.parse(shops[0].availability_json || "{}")
+      : shops[0].availability_json || {};
+  const tc = avail?.temporaryClosure;
+  if (tc && tc.active) {
+    const today = new Date().toISOString().slice(0, 10);
+    const start = tc.startDate || today;
+    const end = tc.endDate || "";
+    if (today >= start && (!end || today <= end)) {
+      const reasonPart = tc.reason ? ` (${tc.reason})` : "";
+      const untilPart = end ? ` until ${end}` : "";
+      throw Object.assign(
+        new Error(
+          `This shop is temporarily closed for emergency${reasonPart}${untilPart}.`,
+        ),
+        { status: 409 },
+      );
+    }
+  }
+
   if (!shops[0].upi_qr_url)
     throw Object.assign(new Error("This shop can't take bookings yet."), {
       status: 409,

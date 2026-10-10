@@ -46,6 +46,7 @@ const groups = [
     [
       ["/owner/shop", "Shop Overview", Store, true],
       ["/owner/shop/details", "Shop Details", FileText],
+      ["/owner/shop/co-owners", "Co-Owners & Staff", Users],
       ["/owner/shop/photos", "Photos", Images],
       ["/owner/shop/location", "Location", MapPin],
       ["/owner/shop/hours", "Opening Hours", Clock],
