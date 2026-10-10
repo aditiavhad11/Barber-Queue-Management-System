@@ -29,6 +29,7 @@ import AdminLayout from "./layouts/AdminLayout";
 import Dashboard from "./pages/owner/Dashboard";
 import MyShops from "./pages/owner/MyShops";
 import CreateShop from "./pages/owner/CreateShop";
+import CoOwners from "./pages/owner/CoOwners";
 import {
   Overview,
   Details,
@@ -83,7 +84,7 @@ const AdminGuard = ({ children }) => {
 };
 const ShopGuard = ({ children }) => {
   const a = useAuth();
-  return a.isAuthed && a.role === "shop" && a.shopId ? (
+  return a.isAuthed && (a.role === "shop" || a.role === "co_owner") && a.shopId ? (
     children
   ) : (
     <Navigate to="/shop-sign-in" />
@@ -96,7 +97,7 @@ const Guard = ({ children }) => {
       <Navigate to="/owner" />
     ) : a.role === "admin" ? (
       <Navigate to="/admin" />
-    ) : a.role === "shop" ? (
+    ) : a.role === "shop" || a.role === "co_owner" ? (
       <Navigate to="/shop" />
     ) : (
       children
@@ -161,6 +162,8 @@ export default function App() {
             <Route path="create-shop" element={<CreateShop />} />
             <Route path="shop" element={<Overview />} />
             <Route path="shop/details" element={<Details />} />
+            <Route path="shop/co-owners" element={<CoOwners />} />
+            <Route path="co-owners" element={<CoOwners />} />
             <Route path="shop/photos" element={<Photos />} />
             <Route path="shop/location" element={<Location />} />
             <Route path="shop/hours" element={<Hours />} />

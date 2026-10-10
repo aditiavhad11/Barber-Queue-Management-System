@@ -89,6 +89,8 @@ export const StatusBadge = ({ s }) => {
     Disabled: "alert",
     Open: "ok",
     Closed: "alert",
+    "Emergency Closed": "alert",
+    "Temporarily Closed": "alert",
   };
   return <Badge tone={m[s] || "info"}>{s}</Badge>;
 };

@@ -1,9 +1,14 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useOwner } from "../../hooks/useOwnerStore";
 import { api } from "../../services/api";
 import { Badge, Rating } from "../../components/common/ui";
 import { activeOf, etaFor } from "../../utils/ownerEta";
+import {
+  getTemporaryClosure,
+  formatDateDisplay,
+} from "../../utils/closedDays";
+import { AlertTriangle } from "lucide-react";
 
 const steps = ["Service", "Barber", "Review", "Policies", "Payment"];
 
@@ -169,6 +174,52 @@ export default function Booking() {
   ][step];
 
   if (!shop) return <div className="fade">Shop is no longer available.</div>;
+
+  const closure = getTemporaryClosure(shop);
+  if (closure.isClosed) {
+    return (
+      <div className="fade max-w-xl mx-auto py-12">
+        <div className="border border-rose/30 bg-rose/10 p-6 rounded-md">
+          <div className="flex items-start gap-4">
+            <AlertTriangle className="text-rose shrink-0 mt-0.5" size={24} />
+            <div>
+              <h2 className="font-semibold text-rose text-xl">
+                Shop is Temporarily Closed
+              </h2>
+              <p className="text-sm text-coffee/90 mt-2">
+                <b>{shop.name}</b> is temporarily closed from{" "}
+                {formatDateDisplay(closure.startDate)} until{" "}
+                <span className="font-semibold">
+                  {formatDateDisplay(closure.endDate) || "further notice"}
+                </span>
+                .
+              </p>
+              {closure.reason ? (
+                <div className="text-sm text-coffee/80 mt-3 p-3 rounded bg-white/40 border border-khaki">
+                  <b>Reason:</b> &ldquo;{closure.reason}&rdquo;
+                </div>
+              ) : null}
+              <p className="text-xs text-coffee/60 mt-3">
+                Queue bookings are disabled during this closure period. Please
+                check back later or book with another barber shop.
+              </p>
+              <div className="mt-5 flex flex-wrap gap-3">
+                <Link
+                  to={`/app/shops/${shop.id}`}
+                  className="btn-ghost !text-xs !py-2"
+                >
+                  View shop details
+                </Link>
+                <Link to="/app/shops" className="btn !text-xs !py-2">
+                  Find other barbers
+                </Link>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fade max-w-3xl">

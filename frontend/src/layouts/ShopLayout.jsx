@@ -25,45 +25,57 @@ import {
 import { useAuth } from "../hooks/useAuth";
 import { useOwner } from "../hooks/useOwnerStore";
 import { StatusBadge, Empty } from "../components/common/ui";
+import { hasPermission } from "../utils/coOwnerPermissions";
 
-const groups = [
-  [null, [["/shop", "Dashboard", LayoutDashboard, true]]],
+const groupsWithPermissions = [
+  [null, [["/shop", "Dashboard", LayoutDashboard, true, null]]],
   [
     "Shop",
     [
-      ["/shop/shop", "Shop Overview", Store, true],
-      ["/shop/shop/details", "Shop Details", FileText],
-      ["/shop/shop/photos", "Photos", Images],
-      ["/shop/shop/location", "Location", MapPin],
-      ["/shop/shop/hours", "Opening Hours", Clock],
-      ["/shop/shop/policies", "Policies", ScrollText],
+      ["/shop/shop", "Shop Overview", Store, true, "manage_profile"],
+      ["/shop/shop/details", "Shop Details", FileText, false, "manage_profile"],
+      ["/shop/shop/photos", "Photos", Images, false, "manage_profile"],
+      ["/shop/shop/location", "Location", MapPin, false, "manage_profile"],
+      ["/shop/shop/hours", "Opening Hours", Clock, false, "manage_hours"],
+      ["/shop/shop/policies", "Policies", ScrollText, false, "manage_profile"],
     ],
   ],
   [
     "Operations",
     [
-      ["/shop/queue", "Queue", ListOrdered],
-      ["/shop/barbers", "Barbers", Scissors],
-      ["/shop/services", "Services", Tag],
+      ["/shop/queue", "Queue", ListOrdered, false, "manage_queue"],
+      ["/shop/barbers", "Barbers", Scissors, false, "manage_barbers"],
+      ["/shop/services", "Services", Tag, false, "manage_services"],
     ],
   ],
   [
     "Business",
     [
-      ["/shop/customers", "Customers", Users],
-      ["/shop/payments", "Payments", CreditCard],
-      ["/shop/earnings", "Earnings", Wallet],
-      ["/shop/reviews", "Reviews", Star],
+      ["/shop/customers", "Customers", Users, false, "view_analytics"],
+      ["/shop/payments", "Payments", CreditCard, false, "view_analytics"],
+      ["/shop/earnings", "Earnings", Wallet, false, "view_analytics"],
+      ["/shop/reviews", "Reviews", Star, false, "view_analytics"],
     ],
   ],
-  [null, [["/shop/notifications", "Notifications", Bell]]],
+  [null, [["/shop/notifications", "Notifications", Bell, false, null]]],
 ];
 
 export default function ShopLayout() {
   const [drawer, setDrawer] = useState(false);
   const nav = useNavigate();
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
   const { shop, notifications } = useOwner();
+  const isCoOwner = user?.role === "co_owner";
+
+  const allowedGroups = groupsWithPermissions
+    .map(([h, items]) => [
+      h,
+      items.filter(
+        ([to, l, I, end, perm]) => !perm || hasPermission(user, perm),
+      ),
+    ])
+    .filter(([_, items]) => items.length > 0);
+
   const out = () => {
     logout();
     nav("/");
@@ -73,9 +85,11 @@ export default function ShopLayout() {
       <div className="font-serif text-2xl text-cream px-6 mb-1">
         Barber Queue
       </div>
-      <div className="label !text-brass px-6 mb-6">Shop dashboard</div>
+      <div className="label !text-brass px-6 mb-6">
+        {isCoOwner ? `${user?.title || "Co-Owner"}` : "Shop dashboard"}
+      </div>
       <nav className="flex-1">
-        {groups.map(([h, items], i) => (
+        {allowedGroups.map(([h, items], i) => (
           <div key={i} className="mb-4">
             {h && <div className="label !text-cream/50 px-6 mb-1">{h}</div>}
             {items.map(([to, l, I, end]) => (
@@ -95,14 +109,16 @@ export default function ShopLayout() {
           </div>
         ))}
       </nav>
-      <NavLink
-        to="/shop/settings"
-        onClick={() => setDrawer(false)}
-        className="flex items-center gap-3 px-6 py-2 text-sm text-cream/80 hover:bg-sidehover hover:text-cream"
-      >
-        <Settings size={16} />
-        Settings
-      </NavLink>
+      {(!isCoOwner || hasPermission(user, "manage_upi")) && (
+        <NavLink
+          to="/shop/settings"
+          onClick={() => setDrawer(false)}
+          className="flex items-center gap-3 px-6 py-2 text-sm text-cream/80 hover:bg-sidehover hover:text-cream"
+        >
+          <Settings size={16} />
+          Settings
+        </NavLink>
+      )}
       <button
         onClick={out}
         className="flex items-center gap-3 px-6 py-2 text-sm text-cream/80 hover:bg-sidehover hover:text-cream"
@@ -116,7 +132,7 @@ export default function ShopLayout() {
     return (
       <Empty
         title="Shop session not found"
-        text="Please sign in again with this shop's credentials."
+        text="Please sign in again with this shop or co-owner's credentials."
         action={
           <Link to="/shop-sign-in" className="btn mt-4">
             Shop sign in
@@ -157,11 +173,20 @@ export default function ShopLayout() {
               {drawer ? <X /> : <Menu />}
             </button>
             <div>
-              <div className="label">Signed in as shop</div>
+              <div className="label">
+                {isCoOwner
+                  ? `Signed in as ${user?.title || "Co-Owner"}`
+                  : "Signed in as shop"}
+              </div>
               <div className="font-serif text-xl leading-tight">
                 {shop.name}
               </div>
             </div>
+            {isCoOwner && (
+              <span className="text-xs font-medium uppercase px-2 py-0.5 rounded bg-brass/20 text-brass border border-brass/40">
+                {user?.name}
+              </span>
+            )}
             <StatusBadge s={label} />
           </div>
           <div className="flex items-center gap-4">

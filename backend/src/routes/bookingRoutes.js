@@ -23,36 +23,36 @@ router.post("/payment-quote", auth, requireRole("customer"), paymentQuote);
 router.post("/payment-submit", auth, requireRole("customer"), submitPayment);
 
 router.get("/mine", auth, requireRole("customer"), listMine);
-router.get("/pending", auth, requireRole("owner", "shop"), listPending);
+router.get("/pending", auth, requireRole("owner", "shop", "co_owner"), listPending);
 
-router.get("/upi-settings", auth, requireRole("owner", "shop"), getUpiSettings);
+router.get("/upi-settings", auth, requireRole("owner", "shop", "co_owner"), getUpiSettings);
 router.put(
   "/upi-settings",
   auth,
-  requireRole("owner", "shop"),
+  requireRole("owner", "shop", "co_owner"),
   saveUpiSettings,
 );
 
-router.get("/queue", auth, requireRole("customer", "owner", "shop"), listQueue);
+router.get("/queue", auth, requireRole("customer", "owner", "shop", "co_owner"), listQueue);
 router.patch(
   "/:id/queue-status",
   auth,
-  requireRole("customer", "owner", "shop"),
+  requireRole("customer", "owner", "shop", "co_owner"),
   setQueueStatus,
 );
 router.delete(
   "/:id/history",
   auth,
-  requireRole("owner", "shop"),
+  requireRole("owner", "shop", "co_owner"),
   deleteBookingHistory,
 );
 
 router.get("/:id", auth, requireRole("customer"), getMine);
-router.patch("/:id/accept", auth, requireRole("owner", "shop"), acceptBooking);
+router.patch("/:id/accept", auth, requireRole("owner", "shop", "co_owner"), acceptBooking);
 router.patch(
   "/:id/decline",
   auth,
-  requireRole("owner", "shop"),
+  requireRole("owner", "shop", "co_owner"),
   declineBooking,
 );
 

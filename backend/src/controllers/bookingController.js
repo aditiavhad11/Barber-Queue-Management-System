@@ -6,10 +6,10 @@ import {
   rupees,
 } from "../models/bookingModel.js";
 
-// Owners see bookings of shops they own. A shop login only sees its own shop.
+// Owners see bookings of shops they own. A shop or co-owner login only sees their own shop.
 const scope = (req) =>
-  req.user.role === "shop"
-    ? { sql: "s.id=?", params: [req.user.sub] }
+  req.user.role === "shop" || req.user.role === "co_owner"
+    ? { sql: "s.id=?", params: [req.user.shopId || req.user.sub] }
     : { sql: "s.owner_id=?", params: [req.user.sub] };
 
 export async function listMine(req, res) {
