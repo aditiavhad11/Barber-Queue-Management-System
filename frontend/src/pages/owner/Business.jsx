@@ -7,6 +7,7 @@ import {
   Rating,
 } from "../../components/common/ui";
 import UpiSettings from "../../components/owner/UpiSettings";
+import { notifySuccess } from "../../utils/toast";
 const Row = ({ cols, head }) => (
   <div
     className={`grid grid-cols-2 md:grid-cols-[repeat(auto-fit,minmax(0,1fr))] gap-x-4 gap-y-1 py-3 border-b border-khaki text-sm ${head ? "hidden md:grid label" : ""}`}
@@ -83,8 +84,9 @@ export function Payments() {
                         setDeleting(p.id);
                         try {
                           await deletePayment(p);
-                        } catch (e) {
-                          window.alert(e.message);
+                          notifySuccess("Payment record deleted.");
+                        } catch {
+                          // Failures surface through the global API error toast.
                         } finally {
                           setDeleting("");
                         }

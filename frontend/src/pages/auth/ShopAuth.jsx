@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../../hooks/useAuth";
 import { useOwner } from "../../hooks/useOwnerStore";
+import { notifyError, notifySuccess } from "../../utils/toast";
 
 export default function ShopAuth() {
   const nav = useNavigate();
@@ -9,11 +10,9 @@ export default function ShopAuth() {
   const { shops } = useOwner();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const submit = async (e) => {
     e.preventDefault();
-    setErr("");
     setBusy(true);
     try {
       if (import.meta.env.VITE_API_URL) {
@@ -94,18 +93,19 @@ export default function ShopAuth() {
                 ? "This shop was rejected. The owner must resubmit it."
                 : "This shop is suspended and cannot be accessed.",
           );
-        login("shop", shop.id, {
-          id: shop.id,
-          name: shop.name,
-          role: "shop",
-          shopId: shop.id,
-          ownerId: shop.ownerId,
-          permissions: { all: true },
-        });
+          login("shop", shop.id, {
+            id: shop.id,
+            name: shop.name,
+            role: "shop",
+            shopId: shop.id,
+            ownerId: shop.ownerId,
+            permissions: { all: true },
+          });
       }
+      notifySuccess("Signed in to the shop dashboard.");
       nav("/shop");
     } catch (error) {
-      setErr(error.message);
+      notifyError(error.message);
     } finally {
       setBusy(false);
     }
@@ -149,7 +149,6 @@ export default function ShopAuth() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
-            {err && <p className="text-sm text-rose">{err}</p>}
             <button className="btn w-full" disabled={busy}>
               {busy ? "Signing in..." : "Sign in to shop dashboard"}
             </button>

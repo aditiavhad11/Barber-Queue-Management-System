@@ -9,6 +9,7 @@ import {
   Empty,
 } from "../../components/common/ui";
 import { activeOf } from "../../utils/ownerEta";
+import { notifySuccess } from "../../utils/toast";
 export default function Services() {
   const { services, queues, barbers, up, addServiceToShop, currentShopId } =
     useOwner();
@@ -46,6 +47,7 @@ export default function Services() {
           price: +s.price,
           duration: +s.duration,
         });
+      notifySuccess(s.id ? "Service updated." : "Service added.");
       setEdit(null);
     } catch (e) {
       setEdit({ ...s, err: e.message });

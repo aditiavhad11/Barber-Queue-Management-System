@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Plus, Store, Layers3 } from "lucide-react";
 import { useOwner } from "../../hooks/useOwnerStore";
 import { PageHead, Empty, Modal, Badge } from "../../components/common/ui";
+import { notifyError, notifySuccess } from "../../utils/toast";
 
 export default function AllShopServices() {
   const { shops, owner, addServiceToAllShops } = useOwner();
@@ -9,7 +10,6 @@ export default function AllShopServices() {
   const [scope, setScope] = useState("all");
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
   const [form, setForm] = useState({ name: "", price: "", duration: "" });
 
   const visibleShops =
@@ -45,16 +45,15 @@ export default function AllShopServices() {
       !Number.isFinite(duration) ||
       duration <= 0
     ) {
-      setMessage("Enter a service name, positive price and positive duration.");
+      notifyError("Enter a service name, positive price and positive duration.");
       return;
     }
     const targets = visibleShops;
     if (!targets.length) {
-      setMessage("Create a shop first.");
+      notifyError("Create a shop first.");
       return;
     }
     setSaving(true);
-    setMessage("");
     try {
       await addServiceToAllShops(
         targets.map((s) => s.id),
@@ -62,11 +61,11 @@ export default function AllShopServices() {
       );
       setForm({ name: "", price: "", duration: "" });
       setOpen(false);
-      setMessage(
+      notifySuccess(
         `“${name}” is now available in ${targets.length} shop${targets.length === 1 ? "" : "s"}. Existing copies were kept.`,
       );
-    } catch (e) {
-      setMessage(e.message || "Could not add the service.");
+    } catch {
+      // Failures surface through the global API error toast.
     } finally {
       setSaving(false);
     }
@@ -80,10 +79,7 @@ export default function AllShopServices() {
         action={
           <button
             className="btn"
-            onClick={() => {
-              setMessage("");
-              setOpen(true);
-            }}
+            onClick={() => setOpen(true)}
           >
             <Plus size={16} />
             Add service to shops
@@ -109,7 +105,6 @@ export default function AllShopServices() {
             ))}
           </select>
         </div>
-        {message && <p className="text-sm text-olive mt-4">{message}</p>}
       </div>
       {!mine.length ? (
         <Empty
@@ -233,7 +228,6 @@ export default function AllShopServices() {
                 })
               }
             />
-            {message && <p className="text-sm text-rose">{message}</p>}
           </div>
         </Modal>
       )}

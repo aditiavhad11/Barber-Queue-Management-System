@@ -5,6 +5,7 @@ import {
   formatDateDisplay,
   toLocalDateString,
 } from "../../utils/closedDays";
+import { notifyError, notifySuccess } from "../../utils/toast";
 
 const pad = (n) => String(n).padStart(2, "0");
 const dateKey = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
@@ -27,7 +28,6 @@ export default function AnnualSchedule({ shop, shops = [], onSave }) {
   const [note, setNote] = useState("");
   const [applyMode, setApplyMode] = useState("current");
   const [targetIds, setTargetIds] = useState([]);
-  const [message, setMessage] = useState("");
   const schedules = annualSchedulesOf(shop);
   const [today] = useState(todayKey);
   const otherShops = shops.filter((s) => s.ownerId === shop.ownerId && s.id !== shop.id);
@@ -52,12 +52,11 @@ export default function AnnualSchedule({ shop, shops = [], onSave }) {
     setSelected((p) =>
       p.includes(key) ? p.filter((x) => x !== key) : [...p, key].sort(),
     );
-    setMessage("");
   };
   const apply = () => {
-    if (!selected.length) return setMessage("Select at least one future date.");
+    if (!selected.length) return notifyError("Select at least one future date.");
     if (kind !== "closed" && close <= open)
-      return setMessage("Closing time must be after opening time.");
+      return notifyError("Closing time must be after opening time.");
     const entry = {
       type: kind,
       open,
@@ -66,7 +65,7 @@ export default function AnnualSchedule({ shop, shops = [], onSave }) {
     };
     const ids = [shop.id, ...affectedIds];
     ids.forEach((id) => onSave(id, selected, entry));
-    setMessage(
+    notifySuccess(
       `${selected.length} date${selected.length === 1 ? "" : "s"} updated for ${ids.length} shop${ids.length === 1 ? "" : "s"}.`,
     );
     setSelected([]);
@@ -74,7 +73,7 @@ export default function AnnualSchedule({ shop, shops = [], onSave }) {
   const remove = (date) => {
     if (date < today) return;
     onSave(shop.id, [date], null);
-    setMessage(`${formatDateDisplay(date, true)} schedule removed.`);
+    notifySuccess(`${formatDateDisplay(date, true)} schedule removed.`);
   };
 
   return (
@@ -187,7 +186,6 @@ export default function AnnualSchedule({ shop, shops = [], onSave }) {
           Clear selection
         </button>
       </div>
-      {message && <p className="text-sm mt-3">{message}</p>}
       <div className="mt-5 space-y-2">
         {Object.entries(schedules)
           .filter(([date]) => date >= today)

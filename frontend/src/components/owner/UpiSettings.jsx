@@ -2,18 +2,18 @@ import { useEffect, useState } from "react";
 import { Upload, Trash2 } from "lucide-react";
 import { api } from "../../services/api";
 import { uploadImage, ACCEPTED, MAX_MB } from "../../services/upload";
+import { notifyError, notifySuccess } from "../../utils/toast";
 
 export default function UpiSettings({ shopId }) {
   const [qrUrl, setQrUrl] = useState("");
   const [selected, setSelected] = useState(null);
   const [preview, setPreview] = useState("");
-  const [note, setNote] = useState({ tone: "", text: "" });
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!shopId) return;
     api
-      .get("/bookings/upi-settings", { params: { shopId } })
+      .get("/bookings/upi-settings", { params: { shopId }, toastOnError: false })
       .then(({ data }) => {
         setQrUrl(data.qrUrl || "");
         setPreview(data.qrUrl || "");
@@ -24,27 +24,19 @@ export default function UpiSettings({ shopId }) {
   const choose = (file) => {
     if (!file) return;
     if (!ACCEPTED.includes(file.type)) {
-      setNote({
-        tone: "err",
-        text: "Only JPG, PNG and WEBP images are allowed.",
-      });
+      notifyError("Only JPG, PNG and WEBP images are allowed.");
       return;
     }
     if (file.size > MAX_MB * 1024 * 1024) {
-      setNote({
-        tone: "err",
-        text: `QR image must be smaller than ${MAX_MB}MB.`,
-      });
+      notifyError(`QR image must be smaller than ${MAX_MB}MB.`);
       return;
     }
     setSelected(file);
     setPreview(URL.createObjectURL(file));
-    setNote({ tone: "", text: "" });
   };
 
   const save = async () => {
     setBusy(true);
-    setNote({ tone: "", text: "" });
     try {
       let nextUrl = qrUrl;
       if (selected) {
@@ -58,18 +50,11 @@ export default function UpiSettings({ shopId }) {
       setQrUrl(nextUrl);
       setSelected(null);
       setPreview(nextUrl);
-      setNote({
-        tone: "ok",
-        text: nextUrl ? "Your original UPI QR is saved." : "UPI QR removed.",
-      });
-    } catch (e) {
-      setNote({
-        tone: "err",
-        text:
-          e.response?.data?.message ||
-          e.message ||
-          "Could not save the QR image.",
-      });
+      notifySuccess(
+        nextUrl ? "Your original UPI QR is saved." : "UPI QR removed.",
+      );
+    } catch {
+      // Failures surface through the global API error toast.
     } finally {
       setBusy(false);
     }
@@ -77,21 +62,14 @@ export default function UpiSettings({ shopId }) {
 
   const remove = async () => {
     setBusy(true);
-    setNote({ tone: "", text: "" });
     try {
       await api.put("/bookings/upi-settings", { shopId, qrUrl: "" });
       setQrUrl("");
       setSelected(null);
       setPreview("");
-      setNote({
-        tone: "ok",
-        text: "UPI QR removed. Customers cannot book until you add one.",
-      });
-    } catch (e) {
-      setNote({
-        tone: "err",
-        text: e.response?.data?.message || "Could not remove the QR image.",
-      });
+      notifySuccess("UPI QR removed. Customers cannot book until you add one.");
+    } catch {
+      // Failures surface through the global API error toast.
     } finally {
       setBusy(false);
     }
@@ -159,14 +137,6 @@ export default function UpiSettings({ shopId }) {
               </button>
             )}
           </div>
-
-          {note.text && (
-            <p
-              className={`text-sm ${note.tone === "err" ? "text-rose" : "text-gold-light"}`}
-            >
-              {note.text}
-            </p>
-          )}
         </div>
       </div>
     </section>
