@@ -276,8 +276,11 @@ export async function listQueue(req, res) {
 }
 
 export async function setQueueStatus(req, res) {
+  const action = String(req.body?.action || "");
+  if (action && !["swap", "requeue", "remove"].includes(action))
+    return res.status(400).json({ message: "Invalid queue action." });
   const status = String(req.body?.status || "");
-  if (!QUEUE_STATUSES.includes(status))
+  if (!action && !QUEUE_STATUSES.includes(status))
     return res.status(400).json({ message: "Invalid queue status." });
   const isCustomer = req.user.role === "customer";
   const booking = isCustomer
@@ -294,6 +297,60 @@ export async function setQueueStatus(req, res) {
   if (!booking || booking.status !== "accepted")
     return res.status(404).json({ message: "Queue entry not found." });
   const current = booking.queueStatus || "Waiting";
+  if (action) {
+    if (current !== "Your Turn")
+      return res.status(409).json({
+        message: "These actions are available only when it is your turn.",
+      });
+    if (req.user.role === "customer" && booking.customerId !== req.user.sub)
+      return res.status(403).json({ message: "You can only manage your own turn." });
+
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      if (action === "swap") {
+        const [nextRows] = await connection.query(
+          `SELECT id FROM payment_bookings
+           WHERE barber_id=? AND status='accepted' AND queue_status='Waiting'
+           ORDER BY COALESCE(skipped_at, accepted_at), accepted_at
+           LIMIT 1 FOR UPDATE`,
+          [booking.barberId],
+        );
+        if (!nextRows.length) {
+          await connection.rollback();
+          return res.status(409).json({ message: "There is no next customer to swap with." });
+        }
+        await connection.query(
+          "UPDATE payment_bookings SET queue_status='Waiting', skipped_at=NOW(), skip_count=skip_count+1 WHERE id=?",
+          [booking.id],
+        );
+        await connection.query(
+          "UPDATE payment_bookings SET queue_status='Your Turn', skipped_at=NULL WHERE id=?",
+          [nextRows[0].id],
+        );
+      } else if (action === "requeue") {
+        await connection.query(
+          "UPDATE payment_bookings SET queue_status='Waiting', skipped_at=NOW(), skip_count=skip_count+1 WHERE id=?",
+          [booking.id],
+        );
+      } else {
+        await connection.query(
+          "UPDATE payment_bookings SET queue_status='Cancelled' WHERE id=?",
+          [booking.id],
+        );
+      }
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+    const [fresh] = await hydrateBookings(
+      await findBookings("b.id=?", [booking.id], "LIMIT 1"),
+    );
+    return res.json({ booking: fresh, action });
+  }
   if (["Completed", "Cancelled", "No Show"].includes(current))
     return res.json({ booking, unchanged: true });
   if (isCustomer && (status !== "Cancelled" || current === "In Service"))

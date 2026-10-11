@@ -11,7 +11,7 @@ const progress = ["Booked", "Waiting", "Your Turn", "In Service", "Completed"];
 const activeStatuses = ["Waiting", "Your Turn", "In Service"];
 
 export default function MyQueue() {
-  const { customerQueues, setQueueStatus, addServiceToQueue } = useOwner();
+  const { customerQueues, setQueueStatus, queueAction, addServiceToQueue } = useOwner();
   const [selectedId, setSelectedId] = useState(null);
   const [distance, setDistance] = useState(null);
   const [adding, setAdding] = useState(false);
@@ -185,7 +185,18 @@ export default function MyQueue() {
             {entry.status}
           </Badge>
           {entry.status === "Your Turn" && (
-            <span className="text-sm text-gold">Please head to the shop.</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm text-gold">Please head to the shop.</span>
+              <button className="btn-ghost !py-1.5" onClick={() => queueAction(shop.id, selected.barberId, entry.id, "swap")}>
+                Swap with next
+              </button>
+              <button className="btn-ghost !py-1.5" onClick={() => queueAction(shop.id, selected.barberId, entry.id, "requeue")}>
+                Go back to queue
+              </button>
+              <button className="btn-ghost !py-1.5 text-rose" onClick={() => queueAction(shop.id, selected.barberId, entry.id, "remove")}>
+                Remove from queue
+              </button>
+            </div>
           )}
           {entry.status === "In Service" && (
             <span className="text-sm text-olive">

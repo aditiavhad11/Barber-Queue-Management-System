@@ -27,6 +27,7 @@ export default function Queue() {
     shop,
     up,
     setQueueStatus,
+    queueAction,
     contactCustomer,
     pendingBookings,
     acceptBooking,
@@ -310,6 +311,14 @@ export default function Queue() {
                           )}
                         {e.status === "Your Turn" && (
                           <>
+                            <button
+                              className="btn-ghost !py-2 text-rose"
+                              onClick={() =>
+                                queueAction(shop.id, b.id, e.id, "remove")
+                              }
+                            >
+                              Remove from queue
+                            </button>
                             <button
                               className="btn !py-2"
                               onClick={() => act(b.id, e, "Start")}
