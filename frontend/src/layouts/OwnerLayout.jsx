@@ -29,6 +29,7 @@ import {
   X,
   User,
   Layers3,
+  MessageSquareWarning,
 } from "lucide-react";
 import { useAuth } from "../hooks/useAuth";
 import { useOwner } from "../hooks/useOwnerStore";
@@ -69,6 +70,7 @@ const groups = [
       ["/owner/payments", "Payments", CreditCard],
       ["/owner/earnings", "Earnings", Wallet],
       ["/owner/reviews", "Reviews", Star],
+      ["/owner/complaints", "Complaints", MessageSquareWarning],
     ],
   ],
   [null, [["/owner/notifications", "Notifications", Bell]]],

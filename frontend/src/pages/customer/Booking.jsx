@@ -11,6 +11,15 @@ import {
 import { AlertTriangle } from "lucide-react";
 
 const steps = ["Service", "Barber", "Review", "Policies", "Payment"];
+const bookingToday = () => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  return `${parts.find((part) => part.type === "year").value}-${parts.find((part) => part.type === "month").value}-${parts.find((part) => part.type === "day").value}`;
+};
 
 const EMAIL_REGEX =
   /^[A-Z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$/i;
@@ -35,6 +44,10 @@ export default function Booking() {
   const [submitBusy, setSubmitBusy] = useState(false);
   const [paymentError, setPaymentError] = useState("");
   const [payerName, setPayerName] = useState("");
+  const [bookingDate, setBookingDate] = useState(bookingToday());
+  const [dateRestrictions, setDateRestrictions] = useState([]);
+  const [availabilityLoading, setAvailabilityLoading] = useState(true);
+  const [availabilityError, setAvailabilityError] = useState("");
 
   const activeSelfBooking = customerQueues?.find(
     (q) =>
@@ -44,6 +57,12 @@ export default function Booking() {
 
   const selected = (shop?.servicesList || []).filter((s) =>
     sids.includes(s.id),
+  );
+  const unavailableByService = new Map(
+    dateRestrictions.map((restriction) => [restriction.serviceId, restriction]),
+  );
+  const blockedSelection = selected.some((service) =>
+    unavailableByService.has(service.id),
   );
   const total = selected.reduce((n, s) => n + Number(s.price || 0), 0);
   const duration = selected.reduce((n, s) => n + Number(s.duration || 0), 0);
@@ -73,7 +92,7 @@ export default function Booking() {
         };
 
   const loadQuote = async () => {
-    if (!shop || !barber || !sids.length || quoteBusy) return;
+    if (!shop || !barber || !sids.length || blockedSelection || quoteBusy) return;
     setQuoteBusy(true);
     setPaymentError("");
     try {
@@ -81,6 +100,7 @@ export default function Booking() {
         shopId: id,
         serviceIds: sids,
         barberId: barber.id,
+        bookingDate,
         beneficiary: beneficiaryBody(),
       });
       setQuote(data);
@@ -100,6 +120,31 @@ export default function Booking() {
   };
 
   useEffect(() => {
+    let cancelled = false;
+    if (!shop?.id || !bookingDate) return undefined;
+    api
+      .get(`/shops/${shop.id}/service-availability`, {
+        params: { date: bookingDate },
+      })
+      .then(({ data }) => {
+        if (!cancelled) setDateRestrictions(Array.isArray(data) ? data : []);
+      })
+      .catch((error) => {
+        if (!cancelled)
+          setAvailabilityError(
+            error.response?.data?.message ||
+              "Could not check service availability for this date.",
+          );
+      })
+      .finally(() => {
+        if (!cancelled) setAvailabilityLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [shop?.id, bookingDate]);
+
+  useEffect(() => {
     if (step === 4) {
       setPayerName(customer?.name || "");
       loadQuote();
@@ -113,6 +158,8 @@ export default function Booking() {
     friend.name,
     friend.mobile,
     friend.email,
+    bookingDate,
+    blockedSelection,
   ]);
 
   const toggleService = (sid) => {
@@ -142,6 +189,7 @@ export default function Booking() {
         shopId: id,
         serviceIds: sids,
         barberId: barber.id,
+        bookingDate,
         beneficiary: beneficiaryBody(),
         payerName: payerName.trim(),
         quoteToken: quote.quoteToken,
@@ -167,7 +215,11 @@ export default function Booking() {
   };
 
   const canNext = [
-    sids.length > 0,
+    sids.length > 0 &&
+      !!bookingDate &&
+      !blockedSelection &&
+      !availabilityLoading &&
+      !availabilityError,
     !!barber && barber.status === "Available",
     true,
     agree,
@@ -239,14 +291,41 @@ export default function Booking() {
 
       {step === 0 && (
         <div className="space-y-5">
+          <label className="block max-w-xs">
+            <span className="label">Booking date</span>
+            <input
+              className="input mt-2"
+              type="date"
+              min={bookingToday()}
+              value={bookingDate}
+              onChange={(e) => {
+                setBookingDate(e.target.value);
+                setDateRestrictions([]);
+                setAvailabilityLoading(true);
+                setAvailabilityError("");
+                setQuote(null);
+                setPaymentError("");
+              }}
+            />
+          </label>
+          {availabilityLoading && (
+            <p className="text-sm text-coffee/70">Checking service availability...</p>
+          )}
+          {availabilityError && (
+            <p className="text-sm text-rose" role="alert">{availabilityError}</p>
+          )}
           <div className="border-t border-khaki">
             {shop.servicesList
               .filter((s) => s.enabled !== false)
-              .map((s) => (
-                <button
+              .map((s) => {
+                const restriction = unavailableByService.get(s.id);
+                const isSelected = sids.includes(s.id);
+                return (
+                  <button
                   key={s.id}
                   onClick={() => toggleService(s.id)}
-                  className={`w-full flex justify-between items-center py-4 px-3 border-b border-khaki text-left ${sids.includes(s.id) ? "bg-olive/15" : ""}`}
+                  disabled={!!restriction && !isSelected}
+                  className={`w-full flex justify-between items-center py-4 px-3 border-b border-khaki text-left disabled:opacity-70 ${isSelected ? "bg-olive/15" : ""}`}
                 >
                   <span className="flex gap-3 items-start">
                     <span
@@ -260,11 +339,17 @@ export default function Booking() {
                       <span className="text-sm text-coffee/70">
                         {s.duration} min
                       </span>
+                      {restriction && (
+                        <span className="block text-sm text-rose mt-1">
+                          {s.name} is unavailable on {formatDateDisplay(bookingDate, true)}.{restriction.reason ? ` Reason: ${restriction.reason}` : ""}
+                        </span>
+                      )}
                     </span>
                   </span>
                   <span>₹{s.price}</span>
-                </button>
-              ))}
+                  </button>
+                );
+              })}
           </div>
 
           {selected.length > 0 && (
@@ -344,6 +429,7 @@ export default function Booking() {
             v={selected.map((s) => `${s.name} · ${s.duration} min`).join(", ")}
           />
           <Row k="Barber" v={barber.name} />
+          <Row k="Booking date" v={formatDateDisplay(bookingDate, true)} />
           <Row
             k="Customers ahead"
             v={activeOf(shop.queues?.[barber.id] || []).length}

@@ -101,7 +101,19 @@ async function hydrateShop(row) {
     "SELECT id,name,gender,experience_years,specialization,rating,status,photo_url FROM barbers WHERE shop_id=? ORDER BY id ASC",
     [row.id],
   );
+let coOwners = [];
 
+try {
+  const [coOwnerRows] = await pool.query(
+    `SELECT id, shop_id, name, email, phone, title,
+            permissions_json, status, created_at, updated_at
+     FROM shop_co_owners
+     WHERE shop_id = ?
+     ORDER BY created_at ASC`,
+    [row.id]
+  );
+
+  coOwners = coOwnerRows.map((c) => ({
   const [coOwnerRows] = await pool.query(
     "SELECT id, shop_id, name, email, phone, title, permissions_json, status, created_at, updated_at FROM shop_co_owners WHERE shop_id=? ORDER BY created_at ASC",
     [row.id],
@@ -118,6 +130,11 @@ async function hydrateShop(row) {
     createdAt: c.created_at,
     updatedAt: c.updated_at,
   }));
+} catch (error) {
+  if (error.code !== "ER_NO_SUCH_TABLE") {
+    throw error;
+  }
+}
 
   let reviewsList = [];
   try {
@@ -583,6 +600,107 @@ export async function createService(req, res) {
     existing: false,
     service: { id, shopId, name, price, duration, enabled: true },
   });
+}
+
+// Date-specific service restrictions are scoped to a service in the requested shop.
+async function ownedService(req) {
+  const { id: shopId, serviceId } = req.params;
+  const isShopLogin = ["shop", "co_owner"].includes(req.user.role);
+  const userShopId = req.user.shopId || req.user.sub;
+  const [rows] = await pool.query(
+    `SELECT s.id FROM services s JOIN shops sh ON sh.id=s.shop_id
+     WHERE s.id=? AND s.shop_id=? AND (sh.owner_id=? OR sh.id=?) LIMIT 1`,
+    [serviceId, shopId, req.user.sub, isShopLogin ? userShopId : "__no_shop__"],
+  );
+  return rows.length > 0;
+}
+
+export async function listServiceUnavailability(req, res) {
+  if (!(await ownedService(req)))
+    return res.status(404).json({ message: "Service not found for this shop." });
+  const [rows] = await pool.query(
+    "SELECT id, DATE_FORMAT(unavailable_date, '%Y-%m-%d') AS date, reason FROM service_unavailability WHERE shop_id=? AND service_id=? ORDER BY unavailable_date ASC",
+    [req.params.id, req.params.serviceId],
+  );
+  res.json(rows.map((row) => ({
+    id: row.id,
+    date: row.date,
+    reason: row.reason || "",
+  })));
+}
+
+export async function listPublicServiceUnavailability(req, res) {
+  const date = String(req.query?.date || "");
+  const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(date)
+    ? new Date(`${date}T00:00:00Z`)
+    : null;
+  if (!parsedDate || Number.isNaN(parsedDate.getTime()) ||
+      parsedDate.toISOString().slice(0, 10) !== date)
+    return res.status(400).json({ message: "Enter a valid booking date." });
+  let rows;
+  try {
+    [rows] = await pool.query(
+      `SELECT u.service_id, s.name, u.unavailable_date, u.reason
+       FROM service_unavailability u
+       JOIN services s ON s.id=u.service_id
+       JOIN shops sh ON sh.id=u.shop_id AND sh.status='approved' AND sh.active=1
+       WHERE u.shop_id=? AND u.unavailable_date=? AND s.enabled=1`,
+      [req.params.id, date],
+    );
+  } catch (error) {
+    if (error.code === "ER_NO_SUCH_TABLE")
+      return res.status(503).json({ message: "Service availability could not be checked right now." });
+    throw error;
+  }
+  res.json(rows.map((row) => ({
+    serviceId: row.service_id,
+    serviceName: row.name,
+    date,
+    reason: row.reason || "",
+  })));
+}
+
+export async function saveServiceUnavailability(req, res) {
+  if (!(await ownedService(req)))
+    return res.status(404).json({ message: "Service not found for this shop." });
+  const date = String(req.body?.date || "");
+  const reason = String(req.body?.reason || "").trim().slice(0, 255) || null;
+  const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(date)
+    ? new Date(`${date}T00:00:00Z`)
+    : null;
+  if (!parsedDate || Number.isNaN(parsedDate.getTime()) ||
+      parsedDate.toISOString().slice(0, 10) !== date)
+    return res.status(400).json({ message: "Enter a valid unavailable date." });
+  try {
+    const id = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO service_unavailability (id, shop_id, service_id, unavailable_date, reason)
+       VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE reason=VALUES(reason)`,
+      [id, req.params.id, req.params.serviceId, date, reason],
+    );
+    const [rows] = await pool.query(
+      "SELECT id, DATE_FORMAT(unavailable_date, '%Y-%m-%d') AS date, reason FROM service_unavailability WHERE shop_id=? AND service_id=? AND unavailable_date=? LIMIT 1",
+      [req.params.id, req.params.serviceId, date],
+    );
+    res.json({ restriction: { id: rows[0].id, date: rows[0].date, reason: rows[0].reason || "" }, message: "Availability restriction saved." });
+  } catch (error) {
+    if (error.code === "ER_NO_SUCH_TABLE")
+      return res.status(503).json({ message: "Availability migration must be applied first." });
+    throw error;
+  }
+}
+
+export async function removeServiceUnavailability(req, res) {
+  if (!(await ownedService(req)))
+    return res.status(404).json({ message: "Service not found for this shop." });
+  const [result] = await pool.query(
+    "DELETE FROM service_unavailability WHERE id=? AND shop_id=? AND service_id=?",
+    [req.params.restrictionId, req.params.id, req.params.serviceId],
+  );
+  if (!result.affectedRows)
+    return res.status(404).json({ message: "Availability restriction not found." });
+  res.json({ message: "Availability restriction removed." });
 }
 
 export async function createBarber(req, res) {

@@ -123,7 +123,7 @@ function beneficiaryFrom(body, customer) {
 
 async function validateSelection(
   connection,
-  { shopId, barberId, serviceIds, customerId },
+  { shopId, barberId, serviceIds, customerId, bookingDate },
 ) {
   const [shops] = await connection.query(
     "SELECT id,name,upi_qr_url,availability_json FROM shops WHERE id=? AND status='approved' AND active=1 LIMIT 1",
@@ -187,6 +187,34 @@ async function validateSelection(
       { status: 400 },
     );
 
+  let unavailable;
+  try {
+    [unavailable] = await connection.query(
+      `SELECT u.service_id, s.name, u.reason
+       FROM service_unavailability u
+       JOIN services s ON s.id=u.service_id AND s.shop_id=u.shop_id
+       WHERE u.shop_id=? AND u.unavailable_date=? AND u.service_id IN (${marks})`,
+      [shopId, bookingDate, ...serviceIds],
+    );
+  } catch (error) {
+    if (error.code === "ER_NO_SUCH_TABLE")
+      throw Object.assign(
+        new Error("Service availability could not be checked right now."),
+        { status: 503 },
+      );
+    throw error;
+  }
+  if (unavailable.length) {
+    const details = unavailable.map((row) => {
+      const dateLabel = new Date(`${bookingDate}T12:00:00Z`).toLocaleDateString(
+        "en-IN",
+        { day: "numeric", month: "long", timeZone: "UTC" },
+      );
+      return `${row.name} is unavailable on ${dateLabel}${row.reason ? `. Reason: ${row.reason}` : "."}`;
+    });
+    throw Object.assign(new Error(details.join(" ")), { status: 409 });
+  }
+
   const [offered] = await connection.query(
     `SELECT service_id FROM barber_services WHERE barber_id=? AND service_id IN (${marks})`,
     [barberId, ...serviceIds],
@@ -217,6 +245,33 @@ async function validateSelection(
     });
 
   return { shop: shops[0], services, customer: users[0], amount, duration };
+}
+
+function requestedBookingDate(value) {
+  const date = String(value || "");
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(date)
+    ? new Date(`${date}T00:00:00Z`)
+    : null;
+  if (
+    !parsed ||
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== date
+  )
+    throw Object.assign(new Error("Select a valid booking date."), {
+      status: 400,
+    });
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const today = `${parts.find((x) => x.type === "year").value}-${parts.find((x) => x.type === "month").value}-${parts.find((x) => x.type === "day").value}`;
+  if (date < today)
+    throw Object.assign(new Error("Choose today or a future booking date."), {
+      status: 400,
+    });
+  return date;
 }
 
 async function chooseAmount(connection, shopId, baseAmount) {
@@ -262,6 +317,12 @@ export async function paymentQuote(req, res) {
     const customerId = req.user.sub;
     const shopId = String(req.body?.shopId || "");
     const barberId = String(req.body?.barberId || "");
+    let bookingDate;
+    try {
+      bookingDate = requestedBookingDate(req.body?.bookingDate);
+    } catch (error) {
+      return res.status(error.status).json({ message: error.message });
+    }
     const serviceIds = [
       ...new Set(
         (Array.isArray(req.body?.serviceIds) ? req.body.serviceIds : []).map(
@@ -278,7 +339,7 @@ export async function paymentQuote(req, res) {
 
     const { shop, services, customer, amount } = await validateSelection(
       connection,
-      { shopId, barberId, serviceIds, customerId },
+      { shopId, barberId, serviceIds, customerId, bookingDate },
     );
     const who = beneficiaryFrom(req.body, customer);
     if (who.error) return res.status(400).json({ message: who.error });
@@ -316,6 +377,7 @@ export async function paymentQuote(req, res) {
       shopId,
       barberId,
       serviceIds,
+      bookingDate,
       beneficiaryKey: who.key,
       amount: finalAmount,
       qrUrl: shop.upi_qr_url,
@@ -344,6 +406,7 @@ export async function submitPayment(req, res) {
     const customerId = req.user.sub;
     const shopId = String(req.body?.shopId || "");
     const barberId = String(req.body?.barberId || "");
+    const bookingDate = requestedBookingDate(req.body?.bookingDate);
     const serviceIds = [
       ...new Set(
         (Array.isArray(req.body?.serviceIds) ? req.body.serviceIds : []).map(
@@ -377,6 +440,7 @@ export async function submitPayment(req, res) {
       shopId,
       barberId,
       serviceIds,
+      bookingDate,
       customerId,
     });
     const who = beneficiaryFrom(req.body, customer);
@@ -412,6 +476,7 @@ export async function submitPayment(req, res) {
       quote.customerId === customerId &&
       quote.shopId === shopId &&
       quote.barberId === barberId &&
+      quote.bookingDate === bookingDate &&
       quote.beneficiaryKey === who.key &&
       quote.qrUrl === shop.upi_qr_url &&
       JSON.stringify(quote.serviceIds) === JSON.stringify(serviceIds);
@@ -435,6 +500,7 @@ export async function submitPayment(req, res) {
         shopId,
         barberId,
         serviceIds.join(","),
+        bookingDate,
         who.key,
         finalAmount.toFixed(2),
       ].join("|"),
@@ -456,25 +522,32 @@ export async function submitPayment(req, res) {
       );
 
     await connection.query(
-      `INSERT INTO payment_bookings
-       (id,shop_id,barber_id,customer_id,service_ids_json,amount,duration_minutes,beneficiary_json,beneficiary_key,request_hash,payment_method,status,payer_name,payment_submitted_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,'upi_qr','payment_submitted',?,NOW())`,
-      [
-        bookingId,
-        shopId,
-        barberId,
-        customerId,
-        JSON.stringify(serviceIds),
-        finalAmount,
-        duration,
-        JSON.stringify(who.person),
-        who.key,
-        requestHash,
-        String(req.body?.payerName || "")
-          .trim()
-          .slice(0, 120) || customer.name,
-      ],
-    );
+  `INSERT INTO payment_bookings
+   (
+     id, shop_id, barber_id, customer_id, booking_date, service_ids_json,
+     amount, duration_minutes, beneficiary_json, beneficiary_key,
+     request_hash, payment_method, status, payer_name, payment_submitted_at
+   )
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+  [
+    bookingId,
+    shopId,
+    barberId,
+    customerId,
+    bookingDate,
+    JSON.stringify(serviceIds),
+    finalAmount,
+    duration,
+    JSON.stringify(who.person),
+    who.key,
+    requestHash,
+    "upi_qr",
+    "payment_submitted",
+    String(req.body?.payerName || "").trim().slice(0, 120) ||
+      customer.name,
+  ],
+);
+
 
     await connection.commit();
 

@@ -21,6 +21,7 @@ import {
   Menu,
   X,
   User,
+  MessageSquareWarning,
 } from "lucide-react";
 import { useAuth } from "../hooks/useAuth";
 import { useOwner } from "../hooks/useOwnerStore";
@@ -55,6 +56,7 @@ const groupsWithPermissions = [
       ["/shop/payments", "Payments", CreditCard, false, "view_analytics"],
       ["/shop/earnings", "Earnings", Wallet, false, "view_analytics"],
       ["/shop/reviews", "Reviews", Star, false, "view_analytics"],
+      ["/shop/complaints", "Complaints", MessageSquareWarning, false, null],
     ],
   ],
   [null, [["/shop/notifications", "Notifications", Bell, false, null]]],

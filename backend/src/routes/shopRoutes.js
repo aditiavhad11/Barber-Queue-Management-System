@@ -12,6 +12,10 @@ import {
   createBarber,
   updateBarber,
   createService,
+  listServiceUnavailability,
+  saveServiceUnavailability,
+  removeServiceUnavailability,
+  listPublicServiceUnavailability,
   listCoOwners,
   createCoOwner,
   updateCoOwner,
@@ -19,6 +23,7 @@ import {
 } from "../controllers/shopController.js";
 const router = Router();
 router.get("/", listApproved);
+router.get("/:id/service-availability", listPublicServiceUnavailability);
 router.get("/mine", auth, requireRole("owner"), listMine);
 router.post("/", auth, requireRole("owner"), createShop);
 router.patch("/:id", auth, requireRole("owner"), updateShop);
@@ -27,6 +32,24 @@ router.post(
   auth,
   requireRole("owner", "shop", "co_owner"),
   createService,
+);
+router.get(
+  "/:id/services/:serviceId/unavailability",
+  auth,
+  requireRole("owner", "shop", "co_owner"),
+  listServiceUnavailability,
+);
+router.post(
+  "/:id/services/:serviceId/unavailability",
+  auth,
+  requireRole("owner", "shop", "co_owner"),
+  saveServiceUnavailability,
+);
+router.delete(
+  "/:id/services/:serviceId/unavailability/:restrictionId",
+  auth,
+  requireRole("owner", "shop", "co_owner"),
+  removeServiceUnavailability,
 );
 router.post(
   "/:id/barbers",

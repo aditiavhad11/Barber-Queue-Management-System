@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../../services/api";
 import { useOwner } from "../../hooks/useOwnerStore";
+import { formatDateDisplay } from "../../utils/closedDays";
 
 const FINAL = ["accepted", "rejected"];
 const TIMEOUT_MS = 15 * 60 * 1000;
@@ -134,6 +135,10 @@ export default function PaymentStatus() {
         <div>
           <dt className="label">Barber</dt>
           <dd className="mt-1">{booking.barberName}</dd>
+        </div>
+        <div>
+          <dt className="label">Booking date</dt>
+          <dd className="mt-1">{formatDateDisplay(booking.bookingDate, true)}</dd>
         </div>
         <div>
           <dt className="label">Services</dt>

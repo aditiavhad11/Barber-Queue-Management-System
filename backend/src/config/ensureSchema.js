@@ -57,6 +57,24 @@ export async function ensureSchema() {
     "INT NOT NULL DEFAULT 0",
   );
   await ensureColumn("payment_bookings", "completed_at", "DATETIME NULL");
+  await ensureColumn("payment_bookings", "booking_date", "DATE NULL");
+  await ensureColumn(
+    "complaints",
+    "issue_type",
+    "VARCHAR(80) NOT NULL DEFAULT 'Other'",
+  );
+  await ensureColumn(
+    "complaints",
+    "subject",
+    "VARCHAR(190) NULL",
+  );
+  await ensureColumn("complaints", "description", "TEXT NULL");
+  await ensureColumn("complaints", "resolved_at", "DATETIME NULL");
+  await ensureColumn("complaints", "target_type", "ENUM('staff','owner') NOT NULL DEFAULT 'owner'");
+  await ensureColumn("complaints", "target_barber_id", "CHAR(36) NULL");
+  await pool.query("CREATE INDEX idx_complaint_routing ON complaints (target_type, shop_id, status)").catch((error) => {
+    if (error.code !== "ER_DUP_KEYNAME") throw error;
+  });
 
   await ensurePaymentStatusValue();
 
@@ -95,5 +113,19 @@ export async function ensureSchema() {
     FOREIGN KEY (shop_id) REFERENCES shops(id) ON DELETE CASCADE,
     INDEX idx_co_owner_shop (shop_id),
     INDEX idx_co_owner_email (email)
+  ) ENGINE=InnoDB`);
+
+  await pool.query(`CREATE TABLE IF NOT EXISTS service_unavailability (
+    id CHAR(36) PRIMARY KEY,
+    shop_id CHAR(36) NOT NULL,
+    service_id CHAR(36) NOT NULL,
+    unavailable_date DATE NOT NULL,
+    reason VARCHAR(255) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_service_unavailable_date (service_id, unavailable_date),
+    INDEX idx_service_unavailability_shop_date (shop_id, unavailable_date),
+    FOREIGN KEY (shop_id) REFERENCES shops(id) ON DELETE CASCADE,
+    FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE CASCADE
   ) ENGINE=InnoDB`);
 }

@@ -166,6 +166,11 @@ export default function Queue() {
                   {b.services.map((x) => x.name).join(" + ")} with{" "}
                   {b.barberName} · {b.durationMinutes} min · ₹{b.amount}
                 </p>
+                {b.bookingDate && (
+                  <p className="text-xs text-hint mt-1">
+                    Booking date: {b.bookingDate}
+                  </p>
+                )}
                 <p className="text-xs text-hint mt-1">
                   Submitted{" "}
                   {b.paymentSubmittedAt

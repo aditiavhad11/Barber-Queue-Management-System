@@ -171,10 +171,17 @@ CREATE TABLE complaints (
   customer_id CHAR(36) NOT NULL,
   shop_id CHAR(36) NOT NULL,
   issue TEXT NOT NULL,
+  issue_type VARCHAR(80) NOT NULL DEFAULT 'Other',
+  subject VARCHAR(190) NULL,
+  description TEXT NULL,
+  target_type ENUM('staff','owner') NOT NULL DEFAULT 'owner',
+  target_barber_id CHAR(36) NULL,
   status ENUM('open','investigating','resolved','closed') NOT NULL DEFAULT 'open',
+  resolved_at DATETIME NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE RESTRICT,
-  FOREIGN KEY (shop_id) REFERENCES shops(id) ON DELETE CASCADE
+  FOREIGN KEY (shop_id) REFERENCES shops(id) ON DELETE CASCADE,
+  INDEX idx_complaint_routing (target_type, shop_id, status)
 ) ENGINE=InnoDB;
 
 CREATE TABLE notifications (
@@ -211,6 +218,7 @@ CREATE TABLE payment_bookings (
   shop_id CHAR(36) NOT NULL,
   barber_id CHAR(36) NOT NULL,
   customer_id CHAR(36) NOT NULL,
+  booking_date DATE NULL,
   service_ids_json JSON NOT NULL,
   amount DECIMAL(10,2) NOT NULL,
   duration_minutes INT UNSIGNED NOT NULL,
@@ -244,6 +252,20 @@ CREATE TABLE payment_bookings (
   INDEX idx_booking_shop_status (shop_id, status),
   INDEX idx_booking_customer (customer_id, status),
   INDEX idx_booking_request (customer_id, request_hash, status)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS service_unavailability (
+  id CHAR(36) PRIMARY KEY,
+  shop_id CHAR(36) NOT NULL,
+  service_id CHAR(36) NOT NULL,
+  unavailable_date DATE NOT NULL,
+  reason VARCHAR(255) NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_service_unavailable_date (service_id, unavailable_date),
+  INDEX idx_service_unavailability_shop_date (shop_id, unavailable_date),
+  FOREIGN KEY (shop_id) REFERENCES shops(id) ON DELETE CASCADE,
+  FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- Server-side queue state and persistent reviews (see migrations/add_queue_reviews.sql)

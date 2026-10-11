@@ -43,6 +43,7 @@ import Queue from "./pages/owner/Queue";
 import Barbers from "./pages/owner/Barbers";
 import Services from "./pages/owner/Services";
 import AllShopServices from "./pages/owner/AllShopServices";
+import OwnerComplaints from "./pages/owner/Complaints";
 import { Payments, Customers, Earnings, Reviews } from "./pages/owner/Business";
 import {
   Notifications as ONotifications,
@@ -177,6 +178,7 @@ export default function App() {
             <Route path="payments" element={<Payments />} />
             <Route path="earnings" element={<Earnings />} />
             <Route path="reviews" element={<Reviews />} />
+            <Route path="complaints" element={<OwnerComplaints />} />
             <Route path="notifications" element={<ONotifications />} />
             <Route path="profile" element={<OProfile />} />
             <Route path="settings" element={<OSettings />} />
@@ -204,6 +206,7 @@ export default function App() {
             <Route path="payments" element={<Payments />} />
             <Route path="earnings" element={<Earnings />} />
             <Route path="reviews" element={<Reviews />} />
+            <Route path="complaints" element={<OwnerComplaints />} />
             <Route path="notifications" element={<ONotifications />} />
             <Route path="profile" element={<OProfile />} />
             <Route path="settings" element={<OSettings />} />
