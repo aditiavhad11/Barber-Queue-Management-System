@@ -83,7 +83,8 @@ export async function requestOtp({
   // use the dev OTP so developers can sign in without needing an external mailbox.
   const isLocalDomain = clean.endsWith(".local") || clean.endsWith(".test");
   const useDevCode =
-    (!emailConfigured || isLocalDomain) && process.env.NODE_ENV !== "production";
+    (!emailConfigured || isLocalDomain) &&
+    process.env.NODE_ENV !== "production";
 
   if (!emailConfigured && !useDevCode) {
     throw new Error(
@@ -298,7 +299,9 @@ export async function shopLogin({ email, password }) {
   ) {
     const co = coRows[0];
     if (co.co_status !== "active") {
-      throw new Error("This co-owner account is currently inactive. Contact the shop owner.");
+      throw new Error(
+        "This co-owner account is currently inactive. Contact the shop owner.",
+      );
     }
     if (co.shop_status !== "approved") {
       throw new Error(`This shop is ${co.shop_status} and cannot be accessed.`);

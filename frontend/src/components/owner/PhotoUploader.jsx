@@ -5,6 +5,7 @@ export default function PhotoUploader({ photos, onChange, error }) {
   const ref = useRef();
   const [errs, setErrs] = useState([]);
   const [busy, setBusy] = useState(false);
+
   const add = async (files) => {
     const e = [],
       ok = [];
@@ -30,6 +31,7 @@ export default function PhotoUploader({ photos, onChange, error }) {
       n[0] = { ...n[0], primary: true };
     onChange(n);
   };
+
   return (
     <div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
