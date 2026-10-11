@@ -15,6 +15,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { useOwner } from "../../hooks/useOwnerStore";
+import { api } from "../../services/api";
 import {
   PageHead,
   StatusBadge,
@@ -736,15 +737,41 @@ export function Refunds() {
   );
 }
 export function Complaints() {
-  const { adminData } = useOwner();
-  const rows = adminData?.complaints || [];
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [busyId, setBusyId] = useState("");
+  const updateStatus = async (complaint, status) => {
+    setBusyId(complaint.id);
+    setError("");
+    try {
+      const { data } = await api.patch(`/complaints/admin/${complaint.id}/status`, { status });
+      setRows((items) => items.map((item) => item.id === complaint.id
+        ? { ...item, status: data.status, resolvedAt: data.status === "Resolved" ? item.resolvedAt || new Date().toISOString() : null }
+        : item));
+    } catch (err) {
+      setError(err.response?.data?.message || "Could not update complaint status.");
+    } finally {
+      setBusyId("");
+    }
+  };
+  useEffect(() => {
+    api
+      .get("/complaints/admin")
+      .then(({ data }) => setRows(data || []))
+      .catch((err) => setError(err.response?.data?.message || "Could not load complaints."))
+      .finally(() => setLoading(false));
+  }, []);
   return (
     <>
       <PageHead
         title="Complaints"
         sub="Customer complaints and resolution state."
       />
-      {!rows.length ? (
+      {error && <p className="text-sm text-rose mb-4" role="alert">{error}</p>}
+      {loading ? (
+        <p className="text-sm text-coffee/70">Loading complaints...</p>
+      ) : !rows.length ? (
         <Empty
           title="No complaints yet"
           text="Customer complaints will appear here after submission."
@@ -757,6 +784,7 @@ export function Complaints() {
                 "ID",
                 "Customer",
                 "Shop",
+                "Target",
                 "Issue",
                 "Subject",
                 "Status",
@@ -770,12 +798,25 @@ export function Complaints() {
             {rows.map((c) => (
               <tr key={c.id}>
                 <Td>{c.id}</Td>
-                <Td>{c.customerId}</Td>
+                <Td>{c.customerName || c.customerId}</Td>
                 <Td>{c.shop}</Td>
+                <Td>{c.targetType === "staff" ? `Staff: ${c.targetName || "Deleted staff member"}` : "Shop owner"}</Td>
                 <Td>{c.issueType}</Td>
-                <Td>{c.subject}</Td>
                 <Td>
-                  <StatusBadge s={c.status} />
+                  <details>
+                    <summary className="cursor-pointer">{c.subject || c.issueType}</summary>
+                    <p className="text-xs text-coffee/70 mt-1 whitespace-pre-wrap">{c.description}</p>
+                  </details>
+                </Td>
+                <Td>
+                  <div className="flex items-center gap-2">
+                    <StatusBadge s={c.status} />
+                    {c.targetType === "owner" && !["Resolved", "Closed"].includes(c.status) && (
+                      <button className="btn-ghost" disabled={busyId === c.id} onClick={() => updateStatus(c, c.status === "In Progress" ? "resolved" : "investigating")}>
+                        {busyId === c.id ? "Saving..." : c.status === "In Progress" ? "Resolve" : "Investigate"}
+                      </button>
+                    )}
+                  </div>
                 </Td>
                 <Td>{relativeTime(c.createdAt)}</Td>
               </tr>

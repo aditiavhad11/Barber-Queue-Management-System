@@ -9,11 +9,71 @@ import {
   Empty,
 } from "../../components/common/ui";
 import { activeOf } from "../../utils/ownerEta";
+import { api } from "../../services/api";
 export default function Services() {
   const { services, queues, barbers, up, addServiceToShop, currentShopId } =
     useOwner();
   const [edit, setEdit] = useState(null);
   const [warn, setWarn] = useState(null);
+  const [availability, setAvailability] = useState(null);
+  const [availabilityDate, setAvailabilityDate] = useState("");
+  const [availabilityReason, setAvailabilityReason] = useState("");
+  const [availabilityRows, setAvailabilityRows] = useState([]);
+  const [availabilityBusy, setAvailabilityBusy] = useState(false);
+  const [availabilityMessage, setAvailabilityMessage] = useState("");
+  const [availabilityError, setAvailabilityError] = useState("");
+  const openAvailability = async (service) => {
+    setAvailability(service);
+    setAvailabilityDate("");
+    setAvailabilityReason("");
+    setAvailabilityMessage("");
+    setAvailabilityError("");
+    setAvailabilityRows([]);
+    setAvailabilityBusy(true);
+    try {
+      const { data } = await api.get(`/shops/${currentShopId}/services/${service.id}/unavailability`);
+      setAvailabilityRows(data);
+    } catch (error) {
+      setAvailabilityError(error.response?.data?.message || "Could not load unavailable dates.");
+      setAvailabilityRows([]);
+    } finally {
+      setAvailabilityBusy(false);
+    }
+  };
+  const saveAvailability = async () => {
+    if (!availabilityDate) return setAvailabilityError("Select a date.");
+    setAvailabilityBusy(true);
+    setAvailabilityError("");
+    setAvailabilityMessage("");
+    try {
+      const { data } = await api.post(`/shops/${currentShopId}/services/${availability.id}/unavailability`, {
+        date: availabilityDate,
+        reason: availabilityReason,
+      });
+      setAvailabilityRows((rows) => [...rows.filter((row) => row.date !== data.restriction.date), data.restriction].sort((a, b) => a.date.localeCompare(b.date)));
+      setAvailabilityMessage(data.message || "Availability restriction saved.");
+      setAvailabilityDate("");
+      setAvailabilityReason("");
+    } catch (error) {
+      setAvailabilityError(error.response?.data?.message || "Could not save this restriction.");
+    } finally {
+      setAvailabilityBusy(false);
+    }
+  };
+  const removeAvailability = async (row) => {
+    setAvailabilityBusy(true);
+    setAvailabilityError("");
+    setAvailabilityMessage("");
+    try {
+      const { data } = await api.delete(`/shops/${currentShopId}/services/${availability.id}/unavailability/${row.id}`);
+      setAvailabilityRows((rows) => rows.filter((item) => item.id !== row.id));
+      setAvailabilityMessage(data.message || "Availability restriction removed.");
+    } catch (error) {
+      setAvailabilityError(error.response?.data?.message || "Could not remove this restriction.");
+    } finally {
+      setAvailabilityBusy(false);
+    }
+  };
   const queued = (id) =>
     Object.values(queues)
       .flatMap(activeOf)
@@ -94,6 +154,9 @@ export default function Services() {
                 <button className="text-sm underline" onClick={() => toggle(s)}>
                   {s.enabled ? "Disable" : "Enable"}
                 </button>
+                <button className="text-sm underline" onClick={() => openAvailability(s)}>
+                  Manage Availability
+                </button>
                 <button aria-label="Edit" onClick={() => setEdit({ ...s })}>
                   <Pencil size={16} />
                 </button>
@@ -159,6 +222,31 @@ export default function Services() {
             }
           />
           {edit.err && <p className="text-rose">{edit.err}</p>}
+        </Modal>
+      )}
+      {availability && (
+        <Modal
+          title={`Manage availability: ${availability.name}`}
+          onClose={() => setAvailability(null)}
+          actions={<button className="btn" disabled={availabilityBusy} onClick={saveAvailability}>{availabilityBusy ? "Saving..." : "Save date"}</button>}
+        >
+          <div className="space-y-3">
+            <input className="input" type="date" value={availabilityDate} onChange={(e) => setAvailabilityDate(e.target.value)} />
+            <input className="input" placeholder="Optional reason" maxLength={255} value={availabilityReason} onChange={(e) => setAvailabilityReason(e.target.value)} />
+            {availabilityMessage && <p className="text-sm text-olive" role="status">{availabilityMessage}</p>}
+            {availabilityError && <p className="text-sm text-rose" role="alert">{availabilityError}</p>}
+            <div className="border-t border-khaki pt-3">
+              <b>Unavailable dates</b>
+              {availabilityBusy && !availabilityRows.length ? <p className="text-sm mt-2">Loading dates...</p> : availabilityRows.length ? (
+                <ul className="mt-2 space-y-2">
+                  {availabilityRows.map((row) => <li key={row.id} className="flex justify-between gap-3 text-sm">
+                    <span>{row.date}{row.reason ? ` · ${row.reason}` : ""}</span>
+                    <button className="underline" disabled={availabilityBusy} onClick={() => removeAvailability(row)}>Remove</button>
+                  </li>)}
+                </ul>
+              ) : <p className="text-sm mt-2 text-coffee/70">No unavailable dates.</p>}
+            </div>
+          </div>
         </Modal>
       )}
       {warn && (

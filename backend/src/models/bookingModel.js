@@ -14,7 +14,7 @@ const iso = (value) => (value ? new Date(value).toISOString() : null);
 export const rupees = (amount) =>
   `Rs. ${Number(amount).toLocaleString("en-IN")}`;
 
-const SELECT_BOOKING = `SELECT b.*, s.name AS shop_name, s.upi_qr_url AS shop_upi_qr_url, bar.name AS barber_name, u.name AS customer_name
+const SELECT_BOOKING = `SELECT b.*, DATE_FORMAT(b.booking_date, '%Y-%m-%d') AS booking_date_string, s.name AS shop_name, s.upi_qr_url AS shop_upi_qr_url, bar.name AS barber_name, u.name AS customer_name
   FROM payment_bookings b
   JOIN shops s ON s.id = b.shop_id
   JOIN barbers bar ON bar.id = b.barber_id
@@ -54,6 +54,7 @@ export async function hydrateBookings(rows) {
       barberId: row.barber_id,
       barberName: row.barber_name || "",
       customerId: row.customer_id,
+      bookingDate: row.booking_date_string || iso(row.created_at)?.slice(0, 10),
       customerName: row.customer_name || "",
       serviceIds,
       services: serviceIds
