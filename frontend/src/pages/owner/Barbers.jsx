@@ -203,7 +203,7 @@ export default function Barbers() {
                 </label>
                 <input
                   className="input"
-                  placeholder="Full name *"
+                  placeholder="eg. Ram Sharma"
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                 />
