@@ -58,9 +58,10 @@ function validateShifts(availability = {}) {
     const dayObj = schedule[day];
     if (!dayObj || dayObj.closed) continue;
 
-    const shifts = Array.isArray(dayObj.shifts) && dayObj.shifts.length
-      ? dayObj.shifts
-      : [{ open: dayObj.open || "09:00", close: dayObj.close || "21:00" }];
+    const shifts =
+      Array.isArray(dayObj.shifts) && dayObj.shifts.length
+        ? dayObj.shifts
+        : [{ open: dayObj.open || "09:00", close: dayObj.close || "21:00" }];
 
     for (let i = 0; i < shifts.length; i++) {
       const s = shifts[i];
@@ -381,15 +382,20 @@ export async function createShop(req, res) {
     return res
       .status(400)
       .json({ message: "Shop name, contact and address are required." });
+
   const annualError = validateAnnualSchedules(b.availability || {});
+
   if (annualError) return res.status(400).json({ message: annualError });
+
   const shiftError = validateShifts(b.availability || {});
+
   if (shiftError) return res.status(400).json({ message: shiftError });
 
   const id = crypto.randomUUID();
 
   // Legacy schema keeps these columns NOT NULL; credentials are generated
   // internally and are not shown to owners.
+
   const internalLoginEmail = `shop-${id}@internal.invalid`;
 
   // Co-owners to create (hash passwords up-front, in parallel, so the
@@ -498,8 +504,12 @@ export async function createShop(req, res) {
         id,
         barber.name?.trim() || `Barber ${i + 1}`,
         String(barber.gender || "Prefer not to say"),
-        barber.age != null && barber.age !== "" ? Math.max(0, Number(barber.age)) : null,
-        barber.phone ? String(barber.phone).replace(/\D/g, "").slice(0, 20) : null,
+        barber.age != null && barber.age !== ""
+          ? Math.max(0, Number(barber.age))
+          : null,
+        barber.phone
+          ? String(barber.phone).replace(/\D/g, "").slice(0, 20)
+          : null,
         barber.email ? String(barber.email).trim().toLowerCase() : null,
         Math.max(0, Number(barber.experience) || 0),
         String(barber.specialization || ""),
@@ -851,13 +861,17 @@ export async function createBarber(req, res) {
   if (b.phone) {
     const phoneDigits = String(b.phone).replace(/\D/g, "");
     if (phoneDigits.length !== 10)
-      return res.status(400).json({ message: "Phone number must be exactly 10 digits." });
+      return res
+        .status(400)
+        .json({ message: "Phone number must be exactly 10 digits." });
   }
   // Age validation
   if (b.age !== undefined && b.age !== null && b.age !== "") {
     const ageVal = Number(b.age);
     if (!Number.isInteger(ageVal) || ageVal < 18 || ageVal > 70)
-      return res.status(400).json({ message: "Age must be between 18 and 70." });
+      return res
+        .status(400)
+        .json({ message: "Age must be between 18 and 70." });
   }
 
   const id = crypto.randomUUID();
@@ -871,7 +885,9 @@ export async function createBarber(req, res) {
         shopId,
         String(b.name).trim(),
         String(b.gender || "Prefer not to say"),
-        b.age !== undefined && b.age !== null && b.age !== "" ? Math.max(0, Number(b.age)) : null,
+        b.age !== undefined && b.age !== null && b.age !== ""
+          ? Math.max(0, Number(b.age))
+          : null,
         b.phone ? String(b.phone).replace(/\D/g, "").slice(0, 20) : null,
         b.email ? String(b.email).trim().toLowerCase() : null,
         Math.max(0, Number(b.experience) || 0),
@@ -935,26 +951,42 @@ export async function updateBarber(req, res) {
   if (b.phone !== undefined && b.phone !== null && b.phone !== "") {
     const phoneDigits = String(b.phone).replace(/\D/g, "");
     if (phoneDigits.length !== 10)
-      return res.status(400).json({ message: "Phone number must be exactly 10 digits." });
+      return res
+        .status(400)
+        .json({ message: "Phone number must be exactly 10 digits." });
   }
   // Age validation
   if (b.age !== undefined && b.age !== null && b.age !== "") {
     const ageVal = Number(b.age);
     if (!Number.isInteger(ageVal) || ageVal < 18 || ageVal > 70)
-      return res.status(400).json({ message: "Age must be between 18 and 70." });
+      return res
+        .status(400)
+        .json({ message: "Age must be between 18 and 70." });
   }
 
   if (b.name !== undefined) add("name", String(b.name).trim());
   if (b.gender !== undefined) add("gender", String(b.gender || ""));
-  if (b.age !== undefined) add("age", b.age !== null && b.age !== "" ? Math.max(0, Number(b.age)) : null);
-  if (b.phone !== undefined) add("phone", b.phone ? String(b.phone).replace(/\D/g, "").slice(0, 20) : null);
-  if (b.email !== undefined) add("email", b.email ? String(b.email).trim().toLowerCase() : null);
+  if (b.age !== undefined)
+    add(
+      "age",
+      b.age !== null && b.age !== "" ? Math.max(0, Number(b.age)) : null,
+    );
+  if (b.phone !== undefined)
+    add(
+      "phone",
+      b.phone ? String(b.phone).replace(/\D/g, "").slice(0, 20) : null,
+    );
+  if (b.email !== undefined)
+    add("email", b.email ? String(b.email).trim().toLowerCase() : null);
   if (b.experience !== undefined)
     add("experience_years", Math.max(0, Number(b.experience) || 0));
   if (b.specialization !== undefined)
     add("specialization", String(b.specialization || ""));
   if (b.workingDays !== undefined)
-    add("working_days_json", b.workingDays ? JSON.stringify(b.workingDays) : null);
+    add(
+      "working_days_json",
+      b.workingDays ? JSON.stringify(b.workingDays) : null,
+    );
   if (b.status !== undefined && BARBER_STATUSES.includes(b.status))
     add("status", b.status);
   if (b.photo !== undefined) add("photo_url", b.photo ? String(b.photo) : null);
