@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../../hooks/useAuth";
 import { useOwner } from "../../hooks/useOwnerStore";
 import { notifyError, notifySuccess } from "../../utils/toast";
@@ -11,6 +12,7 @@ export default function ShopAuth() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showPwd, setShowPwd] = useState(false);
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
@@ -141,14 +143,25 @@ export default function ShopAuth() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
-            <input
-              className="input"
-              type="password"
-              required
-              placeholder="Password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
+            <div className="relative">
+              <input
+                className="input pr-10"
+                type={showPwd ? "text" : "password"}
+                required
+                placeholder="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              <button
+                type="button"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-coffee/50 hover:text-coffee transition-colors"
+                onClick={() => setShowPwd((v) => !v)}
+                tabIndex={-1}
+                aria-label={showPwd ? "Hide password" : "Show password"}
+              >
+                {showPwd ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
             <button className="btn w-full" disabled={busy}>
               {busy ? "Signing in..." : "Sign in to shop dashboard"}
             </button>

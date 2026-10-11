@@ -34,9 +34,13 @@ const newBarber = () => ({
   id: crypto.randomUUID(),
   name: "",
   gender: "Prefer not to say",
+  age: "",
+  phone: "",
+  email: "",
   experience: 0,
   specialization: "",
   services: [],
+  workingDays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
   status: "Available",
   photo: "",
 });
@@ -62,7 +66,15 @@ export default function CreateShop() {
     { id: crypto.randomUUID(), name: "Haircut", price: 150, duration: 20 },
   ]);
   const [barbers, setBarbers] = useState([newBarber()]);
-  const [schedule, setSchedule] = useState(defaultSchedule("09:00", "21:00"));
+  const [schedule, setSchedule] = useState(() => ({
+    Mon: { open: "09:00", close: "21:00", closed: false, shifts: [{ open: "09:00", close: "21:00" }] },
+    Tue: { open: "09:00", close: "21:00", closed: true, shifts: [{ open: "09:00", close: "21:00" }] },
+    Wed: { open: "09:00", close: "21:00", closed: true, shifts: [{ open: "09:00", close: "21:00" }] },
+    Thu: { open: "09:00", close: "21:00", closed: true, shifts: [{ open: "09:00", close: "21:00" }] },
+    Fri: { open: "09:00", close: "21:00", closed: true, shifts: [{ open: "09:00", close: "21:00" }] },
+    Sat: { open: "09:00", close: "21:00", closed: true, shifts: [{ open: "09:00", close: "21:00" }] },
+    Sun: { open: "09:00", close: "21:00", closed: true, shifts: [{ open: "09:00", close: "21:00" }] },
+  }));
   const [annualSchedules, setAnnualSchedules] = useState({});
   const [pol, setPol] = useState(
     Object.fromEntries(POLICIES.map((p) => [p, ""])),
@@ -108,8 +120,9 @@ export default function CreateShop() {
     const x = {};
     if (!f.name.trim()) x.name = "Shop name is required.";
     if (!f.address.trim()) x.address = "Address is required.";
-    if (!/^[+\d][\d\s-]{7,}$/.test(f.contact))
-      x.contact = "Enter a valid contact number.";
+    const contactDigits = f.contact.replace(/\D/g, "");
+    if (!contactDigits || contactDigits.length !== 10)
+      x.contact = "Enter a valid 10-digit Indian mobile number.";
     if (!loc?.confirmed) x.loc = "Find and confirm the exact shop location.";
     if (!photos.length) x.photos = "At least one shop photo is required.";
     {
@@ -247,9 +260,11 @@ export default function CreateShop() {
         <div>
           <input
             className="input"
-            placeholder="Shop contact number"
+            placeholder="Shop contact number (10 digits)"
             value={f.contact}
-            onChange={(e) => set("contact", e.target.value)}
+            inputMode="numeric"
+            maxLength={10}
+            onChange={(e) => set("contact", e.target.value.replace(/\D/g, ""))}
           />
           <Err k="contact" />
         </div>
@@ -372,41 +387,138 @@ export default function CreateShop() {
                 </label>
               </div>
               <div className="grid md:grid-cols-2 gap-3">
-                <input
-                  className="input"
-                  placeholder="Barber name"
-                  value={b.name}
-                  onChange={(e) => updateBarber(b.id, { name: e.target.value })}
-                />
-                <select
-                  className="input"
-                  value={b.gender}
-                  onChange={(e) =>
-                    updateBarber(b.id, { gender: e.target.value })
-                  }
-                >
-                  {["Male", "Female", "Prefer not to say"].map((g) => (
-                    <option key={g}>{g}</option>
+                <div>
+                  <label className="text-[11px] font-medium text-coffee/70 mb-1 block">
+                    Full Name
+                  </label>
+                  <input
+                    className="input"
+                    placeholder="Full name"
+                    value={b.name}
+                    onChange={(e) => updateBarber(b.id, { name: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-medium text-coffee/70 mb-1 block">
+                    Gender
+                  </label>
+                  <select
+                    className="input"
+                    value={b.gender}
+                    onChange={(e) =>
+                      updateBarber(b.id, { gender: e.target.value })
+                    }
+                  >
+                    {["Male", "Female", "Prefer not to say"].map((g) => (
+                      <option key={g}>{g}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[11px] font-medium text-coffee/70 mb-1 block">
+                    Age
+                  </label>
+                  <input
+                    className="input"
+                    type="number"
+                    min={18}
+                    max={70}
+                    placeholder="Age (18-70)"
+                    value={b.age}
+                    onChange={(e) =>
+                      updateBarber(b.id, {
+                        age:
+                          e.target.value === ""
+                            ? ""
+                            : Math.max(0, +e.target.value),
+                      })
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-medium text-coffee/70 mb-1 block">
+                    Phone Number
+                  </label>
+                  <input
+                    className="input"
+                    inputMode="numeric"
+                    maxLength={10}
+                    placeholder="Phone number (10 digits)"
+                    value={b.phone}
+                    onChange={(e) =>
+                      updateBarber(b.id, {
+                        phone: e.target.value.replace(/\D/g, ""),
+                      })
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-medium text-coffee/70 mb-1 block">
+                    Experience (years)
+                  </label>
+                  <input
+                    className="input"
+                    type="number"
+                    min={0}
+                    max={60}
+                    placeholder="Years of experience"
+                    value={b.experience}
+                    onChange={(e) =>
+                      updateBarber(b.id, {
+                        experience: Math.max(0, +e.target.value),
+                      })
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-medium text-coffee/70 mb-1 block">
+                    Specialization
+                  </label>
+                  <input
+                    className="input"
+                    placeholder="e.g. Fade, Beard styling"
+                    value={b.specialization}
+                    onChange={(e) =>
+                      updateBarber(b.id, { specialization: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="text-[11px] font-medium text-coffee/70 mb-1 block">
+                    Email Address (optional)
+                  </label>
+                  <input
+                    className="input"
+                    type="email"
+                    placeholder="barber@example.com"
+                    value={b.email}
+                    onChange={(e) =>
+                      updateBarber(b.id, { email: e.target.value })
+                    }
+                  />
+                </div>
+              </div>
+              <div>
+                <div className="label mb-1">Working days</div>
+                <div className="flex flex-wrap gap-2">
+                  {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map((day) => (
+                    <label key={day} className="flex items-center gap-1 text-sm cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="accent-[#B39A6A]"
+                        checked={(b.workingDays || []).includes(day)}
+                        onChange={(e) =>
+                          updateBarber(b.id, {
+                            workingDays: e.target.checked
+                              ? [...(b.workingDays || []), day]
+                              : (b.workingDays || []).filter((d) => d !== day),
+                          })
+                        }
+                      />
+                      {day}
+                    </label>
                   ))}
-                </select>
-                <input
-                  className="input"
-                  type="number"
-                  min={0}
-                  placeholder="Years of experience"
-                  value={b.experience}
-                  onChange={(e) =>
-                    updateBarber(b.id, { experience: +e.target.value })
-                  }
-                />
-                <input
-                  className="input"
-                  placeholder="Specialization"
-                  value={b.specialization}
-                  onChange={(e) =>
-                    updateBarber(b.id, { specialization: e.target.value })
-                  }
-                />
+                </div>
               </div>
               <div>
                 <div className="label mb-1">Services this barber provides</div>

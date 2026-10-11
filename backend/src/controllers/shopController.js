@@ -44,6 +44,55 @@ const notOwned = (res) =>
     .status(404)
     .json({ message: "Shop not found or not owned by this account." });
 
+/** Validates the per-day weekly shifts in availability.schedule.
+ *  Returns an error string or "" if valid.
+ */
+function validateShifts(availability = {}) {
+  const schedule = availability?.schedule;
+  if (!schedule || typeof schedule !== "object") return "";
+
+  const ALL_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const TIME_RE = /^\d{2}:\d{2}$/;
+
+  for (const day of ALL_DAYS) {
+    const dayObj = schedule[day];
+    if (!dayObj || dayObj.closed) continue;
+
+    const shifts = Array.isArray(dayObj.shifts) && dayObj.shifts.length
+      ? dayObj.shifts
+      : [{ open: dayObj.open || "09:00", close: dayObj.close || "21:00" }];
+
+    for (let i = 0; i < shifts.length; i++) {
+      const s = shifts[i];
+      const open = String(s.open || "").slice(0, 5);
+      const close = String(s.close || "").slice(0, 5);
+
+      if (!TIME_RE.test(open) || !TIME_RE.test(close)) {
+        return `${day} Shift ${i + 1}: Enter valid times in HH:MM format.`;
+      }
+      if (close <= open) {
+        return `${day} Shift ${i + 1}: Closing time must be after opening time.`;
+      }
+      // No overnight shifts
+      if (close < open) {
+        return `${day} Shift ${i + 1}: Overnight shifts (crossing midnight) are not supported.`;
+      }
+    }
+
+    // Check overlaps
+    for (let i = 0; i < shifts.length; i++) {
+      for (let j = i + 1; j < shifts.length; j++) {
+        const a = shifts[i];
+        const b = shifts[j];
+        if (a.open < b.close && b.open < a.close) {
+          return `${day}: Shift ${i + 1} (${a.open}–${a.close}) overlaps with Shift ${j + 1} (${b.open}–${b.close}). Please select a different time.`;
+        }
+      }
+    }
+  }
+  return "";
+}
+
 function validateAnnualSchedules(availability = {}) {
   const schedules =
     availability?.annualSchedules &&
@@ -102,7 +151,7 @@ const mapCoOwner = (c) => ({
 const CO_OWNER_COLUMNS =
   "id, shop_id, name, email, phone, title, permissions_json, status, created_at, updated_at";
 const BARBER_COLUMNS =
-  "id,shop_id,name,gender,experience_years,specialization,rating,status,photo_url";
+  "id,shop_id,name,gender,age,phone,email,experience_years,specialization,working_days_json,rating,status,photo_url";
 
 /* ------------------------------------------------------------------ */
 /* Access helpers                                                      */
@@ -151,7 +200,7 @@ const SHOP_PHOTO_INSERT =
 const SERVICE_INSERT =
   "INSERT INTO services(id,shop_id,name,price,duration_minutes,enabled) VALUES ?";
 const BARBER_INSERT =
-  "INSERT INTO barbers(id,shop_id,name,gender,experience_years,specialization,status,photo_url) VALUES ?";
+  "INSERT INTO barbers(id,shop_id,name,gender,age,phone,email,experience_years,specialization,working_days_json,status,photo_url) VALUES ?";
 const BARBER_SERVICE_INSERT =
   "INSERT INTO barber_services(barber_id,service_id) VALUES ?";
 const CO_OWNER_INSERT =
@@ -284,8 +333,12 @@ async function hydrateShops(shopRows) {
       shopId: row.id,
       name: b.name,
       gender: b.gender || "",
+      age: b.age != null ? Number(b.age) : null,
+      phone: b.phone || "",
+      email: b.email || "",
       experience: b.experience_years || 0,
       specialization: b.specialization || "",
+      workingDays: parseJson(b.working_days_json, null),
       rating: Number(b.rating),
       status: b.status,
       photo: b.photo_url || "",
@@ -330,6 +383,8 @@ export async function createShop(req, res) {
       .json({ message: "Shop name, contact and address are required." });
   const annualError = validateAnnualSchedules(b.availability || {});
   if (annualError) return res.status(400).json({ message: annualError });
+  const shiftError = validateShifts(b.availability || {});
+  if (shiftError) return res.status(400).json({ message: shiftError });
 
   const id = crypto.randomUUID();
 
@@ -443,8 +498,12 @@ export async function createShop(req, res) {
         id,
         barber.name?.trim() || `Barber ${i + 1}`,
         String(barber.gender || "Prefer not to say"),
+        barber.age != null && barber.age !== "" ? Math.max(0, Number(barber.age)) : null,
+        barber.phone ? String(barber.phone).replace(/\D/g, "").slice(0, 20) : null,
+        barber.email ? String(barber.email).trim().toLowerCase() : null,
         Math.max(0, Number(barber.experience) || 0),
         String(barber.specialization || ""),
+        barber.workingDays ? JSON.stringify(barber.workingDays) : null,
         barber.status || "Available",
         barber.photo || null,
       ]);
@@ -515,6 +574,8 @@ export async function updateShop(req, res) {
   if (b.availability !== undefined) {
     const annualError = validateAnnualSchedules(b.availability || {});
     if (annualError) return res.status(400).json({ message: annualError });
+    const shiftError = validateShifts(b.availability || {});
+    if (shiftError) return res.status(400).json({ message: shiftError });
     add("availability_json", JSON.stringify(b.availability || {}));
   }
 
@@ -786,19 +847,36 @@ export async function createBarber(req, res) {
   if (!String(b.name || "").trim())
     return res.status(400).json({ message: "Barber name is required." });
 
+  // Phone validation
+  if (b.phone) {
+    const phoneDigits = String(b.phone).replace(/\D/g, "");
+    if (phoneDigits.length !== 10)
+      return res.status(400).json({ message: "Phone number must be exactly 10 digits." });
+  }
+  // Age validation
+  if (b.age !== undefined && b.age !== null && b.age !== "") {
+    const ageVal = Number(b.age);
+    if (!Number.isInteger(ageVal) || ageVal < 18 || ageVal > 70)
+      return res.status(400).json({ message: "Age must be between 18 and 70." });
+  }
+
   const id = crypto.randomUUID();
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
     await connection.query(
-      "INSERT INTO barbers(id,shop_id,name,gender,experience_years,specialization,status,photo_url) VALUES (?,?,?,?,?,?,?,?)",
+      "INSERT INTO barbers(id,shop_id,name,gender,age,phone,email,experience_years,specialization,working_days_json,status,photo_url) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
       [
         id,
         shopId,
         String(b.name).trim(),
         String(b.gender || "Prefer not to say"),
+        b.age !== undefined && b.age !== null && b.age !== "" ? Math.max(0, Number(b.age)) : null,
+        b.phone ? String(b.phone).replace(/\D/g, "").slice(0, 20) : null,
+        b.email ? String(b.email).trim().toLowerCase() : null,
         Math.max(0, Number(b.experience) || 0),
         String(b.specialization || ""),
+        b.workingDays ? JSON.stringify(b.workingDays) : null,
         BARBER_STATUSES.includes(b.status) ? b.status : "Available",
         b.photo ? String(b.photo) : null,
       ],
@@ -821,7 +899,24 @@ export async function createBarber(req, res) {
     `SELECT ${BARBER_COLUMNS} FROM barbers WHERE id=?`,
     [id],
   );
-  res.status(201).json({ barber: rows[0] });
+  const row = rows[0];
+  res.status(201).json({
+    barber: {
+      id: row.id,
+      shopId: row.shop_id,
+      name: row.name,
+      gender: row.gender || "",
+      age: row.age != null ? Number(row.age) : null,
+      phone: row.phone || "",
+      email: row.email || "",
+      experience: row.experience_years || 0,
+      specialization: row.specialization || "",
+      workingDays: parseJson(row.working_days_json, null),
+      rating: Number(row.rating),
+      status: row.status,
+      photo: row.photo_url || "",
+    },
+  });
 }
 
 export async function updateBarber(req, res) {
@@ -835,12 +930,31 @@ export async function updateBarber(req, res) {
     values.push(v);
   };
   const b = req.body || {};
+
+  // Phone validation
+  if (b.phone !== undefined && b.phone !== null && b.phone !== "") {
+    const phoneDigits = String(b.phone).replace(/\D/g, "");
+    if (phoneDigits.length !== 10)
+      return res.status(400).json({ message: "Phone number must be exactly 10 digits." });
+  }
+  // Age validation
+  if (b.age !== undefined && b.age !== null && b.age !== "") {
+    const ageVal = Number(b.age);
+    if (!Number.isInteger(ageVal) || ageVal < 18 || ageVal > 70)
+      return res.status(400).json({ message: "Age must be between 18 and 70." });
+  }
+
   if (b.name !== undefined) add("name", String(b.name).trim());
   if (b.gender !== undefined) add("gender", String(b.gender || ""));
+  if (b.age !== undefined) add("age", b.age !== null && b.age !== "" ? Math.max(0, Number(b.age)) : null);
+  if (b.phone !== undefined) add("phone", b.phone ? String(b.phone).replace(/\D/g, "").slice(0, 20) : null);
+  if (b.email !== undefined) add("email", b.email ? String(b.email).trim().toLowerCase() : null);
   if (b.experience !== undefined)
     add("experience_years", Math.max(0, Number(b.experience) || 0));
   if (b.specialization !== undefined)
     add("specialization", String(b.specialization || ""));
+  if (b.workingDays !== undefined)
+    add("working_days_json", b.workingDays ? JSON.stringify(b.workingDays) : null);
   if (b.status !== undefined && BARBER_STATUSES.includes(b.status))
     add("status", b.status);
   if (b.photo !== undefined) add("photo_url", b.photo ? String(b.photo) : null);
@@ -883,7 +997,25 @@ export async function updateBarber(req, res) {
       barberId,
     ]),
   ]);
-  res.json({ barber: { ...rows[0], services: maps.map((x) => x.service_id) } });
+  const row = rows[0];
+  res.json({
+    barber: {
+      id: row.id,
+      shopId: row.shop_id,
+      name: row.name,
+      gender: row.gender || "",
+      age: row.age != null ? Number(row.age) : null,
+      phone: row.phone || "",
+      email: row.email || "",
+      experience: row.experience_years || 0,
+      specialization: row.specialization || "",
+      workingDays: parseJson(row.working_days_json, null),
+      rating: Number(row.rating),
+      status: row.status,
+      photo: row.photo_url || "",
+      services: maps.map((x) => x.service_id),
+    },
+  });
 }
 
 /* ------------------------------------------------------------------ */
