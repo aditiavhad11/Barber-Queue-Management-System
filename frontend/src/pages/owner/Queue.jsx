@@ -8,6 +8,7 @@ import {
 } from "../../components/common/ui";
 import { activeOf, etaFor, durOf } from "../../utils/ownerEta";
 import { fmtMin } from "../../utils/eta";
+import { notifyError, notifySuccess } from "../../utils/toast";
 const ARR = {
   ontime: "Arrives on time",
   late: "Late (grace period active)",
@@ -47,6 +48,7 @@ export default function Queue() {
     setPayError("");
     try {
       await acceptBooking(b);
+      notifySuccess("Booking accepted and added to the queue.");
     } catch (e) {
       setPayError(
         e.response?.data?.message ||
@@ -65,6 +67,7 @@ export default function Queue() {
       await declineBooking(b, declineReason);
       setDeclining(null);
       setDeclineReason("");
+      notifySuccess("Booking declined.");
     } catch (e) {
       setPayError(
         e.response?.data?.message ||
@@ -104,8 +107,9 @@ export default function Queue() {
     try {
       await contactCustomer({ shopId: shop.id, queueId: msg.id, message });
       setMsg(null);
+      notifySuccess("Message sent to the customer.");
     } catch (e) {
-      window.alert(e.message);
+      if (!e?.response) notifyError(e.message || "Could not send the email.");
     } finally {
       setSending(false);
     }

@@ -23,6 +23,7 @@ import {
 import WeeklyHours from "../../components/owner/WeeklyHours";
 import AnnualSchedule from "../../components/owner/AnnualSchedule";
 import { to12Hour, from12Hour } from "../../utils/time";
+import { notifyError, notifySuccess } from "../../utils/toast";
 const SaveBar = ({ dirty, onSave, onCancel, saved }) => (
   <div className="flex items-center gap-3 mt-6">
     <button className="btn" disabled={!dirty} onClick={onSave}>
@@ -377,15 +378,13 @@ export function Policies() {
   const empty = Object.values(x.d.policy).some((v) => !v.trim());
   const mine = shops.filter((s) => s.ownerId === owner?.id);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
   const applyAll = async () => {
     setBusy(true);
-    setMsg("");
     try {
       const n = await applyPolicyToAllShops(x.d.policy);
-      setMsg(`These policies now apply to all ${n} of your shops.`);
+      notifySuccess(`These policies now apply to all ${n} of your shops.`);
     } catch (e) {
-      setMsg(e.message);
+      notifyError(e.message);
     } finally {
       setBusy(false);
     }
@@ -429,7 +428,6 @@ export function Policies() {
                 ? "Applying..."
                 : `Apply these policies to all my shops (${mine.length})`}
             </button>
-            {msg && <p className="text-sm mt-2">{msg}</p>}
           </div>
         )}
       </div>

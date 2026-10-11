@@ -10,6 +10,7 @@ import {
 } from "../../components/common/ui";
 import { activeOf } from "../../utils/ownerEta";
 import { uploadImage, ACCEPTED, MAX_MB } from "../../services/upload";
+import { notifySuccess } from "../../utils/toast";
 const blank = {
   name: "",
   gender: "Prefer not to say",
@@ -35,6 +36,7 @@ export default function Barbers() {
     try {
       await saveBarber(form);
       setForm(null);
+      notifySuccess("Barber profile saved.");
     } catch (e) {
       setForm({ ...form, err: e.message });
     }

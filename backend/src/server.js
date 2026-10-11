@@ -9,7 +9,9 @@ import reviewRoutes from "./routes/reviewRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
 import bookingRoutes from "./routes/bookingRoutes.js";
+import uploadRoutes from "./routes/uploadRoutes.js";
 dotenv.config();
+
 if (!process.env.JWT_SECRET) {
   console.error(
     "JWT_SECRET is missing in backend/.env. Copy .env.example to .env and set it.",
@@ -21,6 +23,7 @@ const allowedOrigins = (process.env.CLIENT_URL || "")
   .split(",")
   .map((x) => x.trim())
   .filter(Boolean);
+
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -38,7 +41,9 @@ app.use(
     },
   }),
 );
+
 app.use(express.json({ limit: "10mb" }));
+
 app.get("/api/health", async (_req, res) => {
   try {
     await healthcheck();
@@ -47,12 +52,15 @@ app.get("/api/health", async (_req, res) => {
     res.status(500).json({ ok: false, message: e.message });
   }
 });
+
 app.use("/api/auth", authRoutes);
 app.use("/api/shops", shopRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/bookings", bookingRoutes);
+app.use("/api/uploads", uploadRoutes);
+
 app.use((err, _req, res, _next) => {
   console.error(err);
   res

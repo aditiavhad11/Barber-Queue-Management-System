@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useOwner } from "../../hooks/useOwnerStore";
 import { Empty } from "../../components/common/ui";
 import { relativeTime } from "../../utils/relativeTime";
+import { notifyError, notifySuccess } from "../../utils/toast";
 export default function Complaints() {
   const { shops, customerComplaints, addComplaint } = useOwner();
   const [params] = useSearchParams();
@@ -20,10 +21,14 @@ export default function Complaints() {
   }, [presetShopId]);
   const submit = (e) => {
     e.preventDefault();
-    if (!f.shopId || !f.subject.trim() || !f.description.trim()) return;
+    if (!f.shopId || !f.subject.trim() || !f.description.trim()) {
+      notifyError("Select a shop and fill in the subject and description.");
+      return;
+    }
     addComplaint(f);
     setF({ shopId: "", issueType: "Service", subject: "", description: "" });
     setOpen(false);
+    notifySuccess("Your complaint has been submitted.");
   };
   return (
     <div className="fade max-w-3xl">

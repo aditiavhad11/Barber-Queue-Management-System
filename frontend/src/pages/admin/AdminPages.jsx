@@ -22,6 +22,7 @@ import {
   Modal,
   Empty,
 } from "../../components/common/ui";
+import { notifyError, notifySuccess } from "../../utils/toast";
 
 const fmtStatus = (s) =>
   ({
@@ -189,9 +190,14 @@ export function ShopApprovals() {
         approved: status === "approved",
         active: status === "approved",
       });
+      notifySuccess(
+        status === "approved"
+          ? `${selected.name} approved.`
+          : `${selected.name} rejected.`,
+      );
       closeModal(true);
     } catch (e) {
-      window.alert(e.message);
+      if (!e?.response) notifyError(e.message);
     } finally {
       setBusy(false);
     }
@@ -442,8 +448,9 @@ export function AllShops() {
         active: status === "approved",
         approved: status === "approved",
       });
+      notifySuccess(`${s.name} is now ${status}.`);
     } catch (e) {
-      window.alert(e.message);
+      if (!e?.response) notifyError(e.message);
     } finally {
       setBusy("");
     }
