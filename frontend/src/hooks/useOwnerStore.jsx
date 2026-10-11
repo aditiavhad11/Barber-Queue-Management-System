@@ -910,7 +910,7 @@ export function OwnerProvider({ children }) {
     }
     applyQueueStatus(shopId, barberId, entryId, status, extra);
   };
-  const queueAction = (shopId, barberId, entryId, action) => {
+  const queueAction = (shopId, barberId, entryId, action, targetPosition) => {
     const live = state.shops
       .find((s) => s.id === shopId)
       ?.queues?.[barberId]?.find((e) => e.id === entryId);
@@ -919,7 +919,12 @@ export function OwnerProvider({ children }) {
       api
         .patch(
           `/bookings/${live.bookingId}/queue-status`,
-          { action },
+          {
+            action,
+            ...(action === "swap" && targetPosition
+              ? { targetPosition }
+              : {}),
+          },
           { toastOnError: false },
         )
         .then(() => syncRef.current?.())
@@ -932,23 +937,30 @@ export function OwnerProvider({ children }) {
     }
     setState((p) => {
       const target = p.shops.find((s) => s.id === shopId);
-      const queue = [...(target?.queues?.[barberId] || [])];
+      let queue = [...(target?.queues?.[barberId] || [])];
       const index = queue.findIndex((e) => e.id === entryId);
       if (index < 0 || queue[index].status !== "Your Turn") return p;
       if (action === "remove") queue[index] = { ...queue[index], status: "Cancelled" };
-      else {
+      else if (action === "swap") {
+        const waiting = queue.filter((e) => e.status === "Waiting");
+        const insertionIndex = Number(targetPosition) - 1;
+        if (insertionIndex < 1 || insertionIndex > waiting.length) return p;
+        const currentEntry = queue[index];
+        const moved = {
+          ...currentEntry,
+          status: "Waiting",
+          skippedAt: new Date().toISOString(),
+          skipCount: (currentEntry.skipCount || 0) + 1,
+        };
+        waiting.splice(insertionIndex, 0, moved);
+        queue = waiting;
+      } else {
         const [movingEntry] = queue.splice(index, 1);
         const moving = { ...movingEntry };
         moving.status = "Waiting";
         moving.skippedAt = new Date().toISOString();
         moving.skipCount = (moving.skipCount || 0) + 1;
-        if (action === "swap") {
-          const nextIndex = queue.findIndex((e) => e.status === "Waiting");
-          if (nextIndex >= 0) {
-            queue[nextIndex] = { ...queue[nextIndex], status: "Your Turn" };
-            queue.push(moving);
-          } else queue.push(moving);
-        } else queue.push(moving);
+        queue.push(moving);
       }
       const nextShops = p.shops.map((s) =>
         s.id === shopId

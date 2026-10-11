@@ -18,6 +18,7 @@ export default function MyQueue() {
   const [selectedServices, setSelectedServices] = useState([]);
   const [paying, setPaying] = useState(false);
   const [addServiceError, setAddServiceError] = useState("");
+  const [swapTargetPosition, setSwapTargetPosition] = useState("");
 
   const activeBookings = useMemo(
     () => customerQueues.filter((q) => activeStatuses.includes(q.entry.status)),
@@ -54,6 +55,7 @@ export default function MyQueue() {
     : [selected.service].filter(Boolean);
   const queue = shop.queues?.[selected.barberId] || [];
   const active = activeOf(queue);
+  const waitingEntries = active.filter((item) => item.status === "Waiting");
   const index = active.findIndex((e) => e.id === entry.id);
   const position = index >= 0 ? index + 1 : null;
   const wait =
@@ -105,6 +107,10 @@ export default function MyQueue() {
       setPaying(false);
     }
   };
+  const positionOptions = waitingEntries.map((_, index) => index + 2);
+  const swapTarget = positionOptions.includes(Number(swapTargetPosition))
+    ? Number(swapTargetPosition)
+    : positionOptions[0] || 0;
 
   return (
     <div className="fade max-w-5xl">
@@ -187,9 +193,38 @@ export default function MyQueue() {
           {entry.status === "Your Turn" && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm text-gold">Please head to the shop.</span>
-              <button className="btn-ghost !py-1.5" onClick={() => queueAction(shop.id, selected.barberId, entry.id, "swap")}>
-                Swap with next
-              </button>
+              {waitingEntries.length > 0 && (
+                <>
+                  <label className="flex items-center gap-2 text-sm">
+                    Swap with position
+                    <select
+                      className="input !w-auto !py-1.5"
+                      value={swapTarget}
+                      onChange={(event) => setSwapTargetPosition(event.target.value)}
+                    >
+                      {positionOptions.map((position) => (
+                        <option key={position} value={position}>
+                          Position {position}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    className="btn-ghost !py-1.5"
+                    onClick={() =>
+                      queueAction(
+                        shop.id,
+                        selected.barberId,
+                        entry.id,
+                        "swap",
+                        swapTarget,
+                      )
+                    }
+                  >
+                    Swap customer
+                  </button>
+                </>
+              )}
               <button className="btn-ghost !py-1.5" onClick={() => queueAction(shop.id, selected.barberId, entry.id, "requeue")}>
                 Go back to queue
               </button>

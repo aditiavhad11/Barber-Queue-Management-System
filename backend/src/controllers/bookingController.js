@@ -279,10 +279,14 @@ export async function setQueueStatus(req, res) {
   const action = String(req.body?.action || "");
   if (action && !["swap", "requeue", "remove"].includes(action))
     return res.status(400).json({ message: "Invalid queue action." });
+
   const status = String(req.body?.status || "");
+
   if (!action && !QUEUE_STATUSES.includes(status))
     return res.status(400).json({ message: "Invalid queue status." });
+
   const isCustomer = req.user.role === "customer";
+
   const booking = isCustomer
     ? (
         await hydrateBookings(
@@ -296,37 +300,66 @@ export async function setQueueStatus(req, res) {
     : await loadOwned(req);
   if (!booking || booking.status !== "accepted")
     return res.status(404).json({ message: "Queue entry not found." });
+
   const current = booking.queueStatus || "Waiting";
+
   if (action) {
     if (current !== "Your Turn")
       return res.status(409).json({
         message: "These actions are available only when it is your turn.",
       });
+
     if (req.user.role === "customer" && booking.customerId !== req.user.sub)
-      return res.status(403).json({ message: "You can only manage your own turn." });
+      return res
+        .status(403)
+        .json({ message: "You can only manage your own turn." });
 
     const connection = await pool.getConnection();
+
     try {
       await connection.beginTransaction();
+
       if (action === "swap") {
-        const [nextRows] = await connection.query(
-          `SELECT id FROM payment_bookings
-           WHERE barber_id=? AND status='accepted' AND queue_status='Waiting'
+        const requestedPosition = Number(req.body?.targetPosition);
+        const [waitingRows] = await connection.query(
+          `SELECT id
+           FROM payment_bookings
+           WHERE barber_id=? AND shop_id=? AND status='accepted'
+             AND queue_status='Waiting'
            ORDER BY COALESCE(skipped_at, accepted_at), accepted_at
-           LIMIT 1 FOR UPDATE`,
-          [booking.barberId],
+           FOR UPDATE`,
+          [booking.barberId, booking.shopId],
         );
-        if (!nextRows.length) {
+        const targetIndex = Number.isInteger(requestedPosition)
+          ? requestedPosition - 1
+          : 0;
+
+        if (
+          targetIndex < 1 ||
+          targetIndex > waitingRows.length ||
+          !waitingRows.length
+        ) {
           await connection.rollback();
-          return res.status(409).json({ message: "There is no next customer to swap with." });
+          return res
+            .status(409)
+            .json({ message: "Choose a valid position in the queue." });
         }
+
+        const orderedIds = waitingRows.map((row) => row.id);
+        orderedIds.splice(targetIndex, 0, booking.id);
+        for (let index = 0; index < orderedIds.length; index += 1) {
+          const id = orderedIds[index];
+          await connection.query(
+            `UPDATE payment_bookings
+             SET queue_status=?, skipped_at=DATE_ADD(NOW(), INTERVAL ${index} SECOND)
+             WHERE id=?`,
+            [index === 0 ? "Your Turn" : "Waiting", id],
+          );
+        }
+
         await connection.query(
-          "UPDATE payment_bookings SET queue_status='Waiting', skipped_at=NOW(), skip_count=skip_count+1 WHERE id=?",
+          "UPDATE payment_bookings SET skip_count=skip_count+1 WHERE id=?",
           [booking.id],
-        );
-        await connection.query(
-          "UPDATE payment_bookings SET queue_status='Your Turn', skipped_at=NULL WHERE id=?",
-          [nextRows[0].id],
         );
       } else if (action === "requeue") {
         await connection.query(
@@ -351,8 +384,10 @@ export async function setQueueStatus(req, res) {
     );
     return res.json({ booking: fresh, action });
   }
+
   if (["Completed", "Cancelled", "No Show"].includes(current))
     return res.json({ booking, unchanged: true });
+
   if (isCustomer && (status !== "Cancelled" || current === "In Service"))
     return res
       .status(403)
