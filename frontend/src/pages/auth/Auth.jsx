@@ -417,7 +417,7 @@ export default function Auth({ mode }) {
                   </Link>
                   <span className="mx-2">·</span>
                   <Link className="underline" to="/shop-sign-in">
-                    Shop login
+                    Shop / Co-Owner login
                   </Link>
                 </>
               ) : role === "admin" ? (
@@ -435,7 +435,7 @@ export default function Auth({ mode }) {
                   </Link>
                   <span className="mx-2">·</span>
                   <Link className="underline" to="/shop-sign-in">
-                    Shop login
+                    Shop / Co-Owner login
                   </Link>
                 </>
               )}

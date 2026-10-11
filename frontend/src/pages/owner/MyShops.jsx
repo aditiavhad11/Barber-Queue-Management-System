@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useState } from "react";
-import { Plus, MapPin, Clock, Trash2, MessageSquareText } from "lucide-react";
+import { Plus, MapPin, Clock, Trash2, MessageSquareText, Users } from "lucide-react";
 import { useOwner } from "../../hooks/useOwnerStore";
 import {
   PageHead,
@@ -122,6 +122,11 @@ export default function MyShops() {
                   <span className="label">Shop login</span>{" "}
                   {s.loginEmail || "Not configured"}
                 </p>
+                <p className="flex items-center gap-1.5 pt-0.5">
+                  <Users size={14} className="text-coffee/60" />
+                  <span className="label">Co-Owners</span>
+                  <span>{s.coOwners?.length ? `${s.coOwners.length} assigned` : "None"}</span>
+                </p>
               </div>
               <div className="flex flex-wrap gap-3 mt-5">
                 {currentShopId === s.id ? (
@@ -133,6 +138,13 @@ export default function MyShops() {
                       : "Select this shop"}
                   </button>
                 )}
+                <button
+                  className="btn-ghost"
+                  onClick={() => openShop(s.id, "/owner/shop/co-owners")}
+                >
+                  <Users size={14} />
+                  Co-Owners ({s.coOwners?.length || 0})
+                </button>
                 {s.status === "rejected" ? (
                   <>
                     <button

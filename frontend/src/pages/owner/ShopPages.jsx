@@ -11,12 +11,14 @@ import {
 } from "../../components/common/ui";
 import PhotoUploader from "../../components/owner/PhotoUploader";
 import LocationPicker from "../../components/owner/LocationPicker";
+import EmergencyClosure from "../../components/owner/EmergencyClosure";
 import { activeOf } from "../../utils/ownerEta";
 import {
   scheduleOf,
   withSchedule,
   hoursFromSchedule,
   scheduleError,
+  getTemporaryClosure,
 } from "../../utils/closedDays";
 import WeeklyHours from "../../components/owner/WeeklyHours";
 import { to12Hour, from12Hour } from "../../utils/time";
@@ -35,6 +37,7 @@ export function Overview() {
   const { shop, services, barbers, queues, up, sessionRole } = useOwner();
   const base = sessionRole === "shop" ? "/shop" : "/owner";
   const prim = shop.photos.find((p) => p.primary) || shop.photos[0];
+  const closure = getTemporaryClosure(shop);
   return (
     <>
       <PageHead
@@ -51,7 +54,15 @@ export function Overview() {
                 }[shop.status]
               }
             />
-            <StatusBadge s={shop.isOpen ? "Open" : "Closed"} />
+            <StatusBadge
+              s={
+                closure.isClosed
+                  ? "Emergency Closed"
+                  : shop.isOpen
+                    ? "Open"
+                    : "Closed"
+              }
+            />
           </div>
         }
       />
@@ -90,7 +101,17 @@ export function Overview() {
         Shop open/closed is separate from each barber's availability and each
         service's enabled state.
       </p>
-      <div className="grid md:grid-cols-3 gap-5 mt-6 items-stretch">
+
+      {shop.status === "approved" && (
+        <EmergencyClosure
+          shop={shop}
+          onUpdate={(nextAvail) =>
+            up("shop", (p) => ({ ...p, availability: nextAvail }))
+          }
+        />
+      )}
+
+      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-5 mt-6 items-stretch">
         <div className="ov-card">
           <div className="label mb-3">Barbers</div>
           <div className="font-serif text-5xl">{barbers.length}</div>
@@ -125,6 +146,23 @@ export function Overview() {
             ))
           ) : (
             <p className="text-sm text-coffee/60">No barbers yet.</p>
+          )}
+        </div>
+        <div className="ov-card flex flex-col justify-between">
+          <div>
+            <div className="label mb-3">Co-Owners</div>
+            <div className="font-serif text-5xl">{(shop.coOwners || []).length}</div>
+            <p className="text-xs text-coffee/60 mt-2">
+              {(shop.coOwners || []).filter((c) => c.status === "active").length} active managers
+            </p>
+          </div>
+          {sessionRole === "owner" && (
+            <Link
+              to="/owner/shop/co-owners"
+              className="text-xs font-semibold text-brass hover:underline mt-4 block"
+            >
+              Manage Co-Owners &rarr;
+            </Link>
           )}
         </div>
       </div>
@@ -276,6 +314,7 @@ export function Location() {
   );
 }
 export function Hours() {
+  const { shop, up } = useOwner();
   const x = useDraft(["hours", "availability"]);
   const schedule = scheduleOf({
     availability: x.d.availability,
@@ -300,6 +339,14 @@ export function Hours() {
           onCancel={x.cancel}
           saved={x.saved}
         />
+        <div className="mt-8 pt-8 border-t border-khaki">
+          <EmergencyClosure
+            shop={shop}
+            onUpdate={(nextAvail) =>
+              up("shop", (p) => ({ ...p, availability: nextAvail }))
+            }
+          />
+        </div>
       </div>
     </>
   );

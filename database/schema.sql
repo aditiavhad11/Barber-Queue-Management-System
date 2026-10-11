@@ -264,3 +264,20 @@ CREATE TABLE IF NOT EXISTS booking_reviews (
   FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE CASCADE,
   INDEX idx_booking_review_shop (shop_id)
 ) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS shop_co_owners (
+  id CHAR(36) PRIMARY KEY,
+  shop_id CHAR(36) NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  email VARCHAR(190) NOT NULL,
+  phone VARCHAR(40) NOT NULL,
+  title VARCHAR(60) NOT NULL DEFAULT 'Co-Owner',
+  password_hash VARCHAR(255) NOT NULL,
+  permissions_json JSON NOT NULL,
+  status ENUM('active','inactive') NOT NULL DEFAULT 'active',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (shop_id) REFERENCES shops(id) ON DELETE CASCADE,
+  INDEX idx_co_owner_shop (shop_id),
+  INDEX idx_co_owner_email (email)
+) ENGINE=InnoDB;

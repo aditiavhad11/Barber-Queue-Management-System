@@ -1,10 +1,15 @@
 import { Link } from "react-router-dom";
-import { isShopOpenNow } from "../../utils/closedDays";
-import { MapPin } from "lucide-react";
+import {
+  isShopOpenNow,
+  getTemporaryClosure,
+  formatDateDisplay,
+} from "../../utils/closedDays";
+import { MapPin, AlertCircle } from "lucide-react";
 import { Rating, Badge } from "./ui";
 import { fmtMin } from "../../utils/eta";
 import { activeOf, etaFor } from "../../utils/ownerEta";
 export default function ShopCard({ shop }) {
+  const closure = getTemporaryClosure(shop);
   const list = (shop.servicesList || shop.services || [])
     .filter(Boolean)
     .map((x) => (typeof x === "object" ? x : null))
@@ -47,6 +52,19 @@ export default function ShopCard({ shop }) {
           <MapPin size={14} />
           {shop.address} · {shop.distanceKm ?? "-"} km
         </p>
+
+        {closure.isClosed && (
+          <div className="mt-2 text-xs bg-rose/10 text-rose border border-rose/25 px-2.5 py-1.5 rounded flex items-start gap-1.5">
+            <AlertCircle size={14} className="shrink-0 mt-0.5" />
+            <span className="line-clamp-2">
+              {closure.endDate
+                ? `Closed until ${formatDateDisplay(closure.endDate)}`
+                : "Temporarily closed"}
+              {closure.reason ? ` · ${closure.reason}` : ""}
+            </span>
+          </div>
+        )}
+
         <div className="flex flex-wrap gap-1.5 mt-3">
           {list.map((s) => (
             <span
@@ -63,7 +81,11 @@ export default function ShopCard({ shop }) {
             {isShopOpenNow(shop) ? `${n} waiting · ~${fmtMin(wait)}` : ""}
           </span>
           <Badge tone={isShopOpenNow(shop) ? "ok" : "alert"}>
-            {isShopOpenNow(shop) ? "Open" : "Closed"}
+            {closure.isClosed
+              ? "Temporarily Closed"
+              : isShopOpenNow(shop)
+                ? "Open"
+                : "Closed"}
           </Badge>
         </div>
       </div>

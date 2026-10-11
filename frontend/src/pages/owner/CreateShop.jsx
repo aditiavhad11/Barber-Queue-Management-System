@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Trash2, Upload } from "lucide-react";
+import { Plus, Trash2, Upload, Users, Eye, EyeOff, ShieldCheck } from "lucide-react";
 import { useOwner } from "../../hooks/useOwnerStore";
 import { PageHead } from "../../components/common/ui";
 import PhotoUploader from "../../components/owner/PhotoUploader";
@@ -13,6 +13,11 @@ import {
   scheduleError,
 } from "../../utils/closedDays";
 import { uploadImage, ACCEPTED, MAX_MB } from "../../services/upload";
+import {
+  CO_OWNER_PERMISSIONS,
+  PERMISSION_PRESETS,
+  DEFAULT_PERMISSIONS,
+} from "../../utils/coOwnerPermissions";
 
 const POLICIES = [
   "Cancellation",
@@ -59,6 +64,16 @@ export default function CreateShop() {
   const [pol, setPol] = useState(
     Object.fromEntries(POLICIES.map((p) => [p, ""])),
   );
+  const [hasCoOwner, setHasCoOwner] = useState(false);
+  const [showCoOwnerPassword, setShowCoOwnerPassword] = useState(false);
+  const [coOwner, setCoOwner] = useState({
+    name: "",
+    email: "",
+    phone: "",
+    title: "Co-Owner",
+    password: "",
+    permissions: { ...DEFAULT_PERMISSIONS },
+  });
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
 
   const updateBarber = (id, patch) =>
@@ -114,6 +129,15 @@ export default function CreateShop() {
       x.svc = "Add at least one service with a name, price and duration.";
     if (POLICIES.some((p) => !pol[p].trim()))
       x.pol = "Fill in all six shop policies.";
+    if (hasCoOwner) {
+      if (!coOwner.name.trim()) x.coOwnerName = "Enter co-owner full name.";
+      if (!coOwner.email.trim() || !coOwner.email.includes("@"))
+        x.coOwnerEmail = "Enter a valid email address for co-owner.";
+      if (!coOwner.phone.trim())
+        x.coOwnerPhone = "Enter contact phone for co-owner.";
+      if (!coOwner.password || coOwner.password.length < 6)
+        x.coOwnerPassword = "Password must be at least 6 characters.";
+    }
     setErrs(x);
     if (Object.keys(x).length) return;
     setSaving(true);
@@ -137,6 +161,18 @@ export default function CreateShop() {
         barberCount: barbers.length,
         barbers: barbers.map(({ id, ...b }) => b),
         services,
+        coOwners: hasCoOwner
+          ? [
+              {
+                name: coOwner.name.trim(),
+                email: coOwner.email.trim().toLowerCase(),
+                phone: coOwner.phone.trim(),
+                title: coOwner.title.trim() || "Co-Owner",
+                password: coOwner.password,
+                permissions: coOwner.permissions,
+              },
+            ]
+          : [],
         availability: {
           ...withSchedule(
             { mode: "queue", note: "Walk-in queue during opening hours." },
@@ -486,6 +522,196 @@ export default function CreateShop() {
           </label>
         ))}
         <Err k="pol" />
+      </div>
+      <H n="09" t="Shop Co-Owner / Manager (Optional)" />
+      <div className="create-card space-y-4">
+        <div className="flex items-start justify-between gap-4 p-4 rounded-md border border-khaki bg-card/40">
+          <div>
+            <h3 className="font-medium text-base flex items-center gap-2">
+              <Users size={18} className="text-brass" />
+              Assign Co-Owner to this Shop
+            </h3>
+            <p className="text-xs text-coffee/70 mt-1 max-w-lg">
+              Delegate day-to-day chair management, customer queues, and staff shifts to a co-owner or branch manager while you retain complete primary owner control.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setHasCoOwner(!hasCoOwner)}
+            className={`px-3 py-1.5 text-xs rounded border transition-all font-medium ${
+              hasCoOwner
+                ? "bg-brass text-side border-brass font-semibold"
+                : "bg-transparent text-coffee border-khaki hover:border-gold"
+            }`}
+          >
+            {hasCoOwner ? "Enabled" : "+ Add Co-Owner"}
+          </button>
+        </div>
+
+        {hasCoOwner && (
+          <div className="space-y-4 pt-2 border-t border-khaki/50">
+            <div className="grid md:grid-cols-2 gap-3">
+              <div>
+                <label className="label mb-1">Full Name *</label>
+                <input
+                  className="input"
+                  placeholder="e.g. Rahul Sharma"
+                  value={coOwner.name}
+                  onChange={(e) =>
+                    setCoOwner({ ...coOwner, name: e.target.value })
+                  }
+                />
+                <Err k="coOwnerName" />
+              </div>
+              <div>
+                <label className="label mb-1">Role Title</label>
+                <input
+                  className="input"
+                  placeholder="e.g. Co-Owner, Store Manager"
+                  value={coOwner.title}
+                  onChange={(e) =>
+                    setCoOwner({ ...coOwner, title: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-3">
+              <div>
+                <label className="label mb-1">Email Address *</label>
+                <input
+                  type="email"
+                  className="input"
+                  placeholder="manager@barbershop.com"
+                  value={coOwner.email}
+                  onChange={(e) =>
+                    setCoOwner({ ...coOwner, email: e.target.value })
+                  }
+                />
+                <p className="text-[11px] text-coffee/60 mt-1">
+                  Used by co-owner to sign in to this shop's dashboard.
+                </p>
+                <Err k="coOwnerEmail" />
+              </div>
+              <div>
+                <label className="label mb-1">Phone Number *</label>
+                <input
+                  type="tel"
+                  className="input"
+                  placeholder="+91 98765 43210"
+                  value={coOwner.phone}
+                  onChange={(e) =>
+                    setCoOwner({ ...coOwner, phone: e.target.value })
+                  }
+                />
+                <Err k="coOwnerPhone" />
+              </div>
+            </div>
+
+            <div>
+              <label className="label mb-1">Shop Sign-In Password *</label>
+              <div className="relative">
+                <input
+                  type={showCoOwnerPassword ? "text" : "password"}
+                  className="input pr-10"
+                  placeholder="At least 6 characters"
+                  value={coOwner.password}
+                  onChange={(e) =>
+                    setCoOwner({ ...coOwner, password: e.target.value })
+                  }
+                />
+                <button
+                  type="button"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-coffee/60 hover:text-coffee"
+                  onClick={() => setShowCoOwnerPassword(!showCoOwnerPassword)}
+                >
+                  {showCoOwnerPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+              <Err k="coOwnerPassword" />
+            </div>
+
+            <div>
+              <label className="label mb-2 flex items-center justify-between">
+                <span>Access Presets</span>
+                <span className="text-xs text-coffee/60 font-normal">
+                  Click to quickly populate permissions
+                </span>
+              </label>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+                {PERMISSION_PRESETS.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => {
+                      if (p.id !== "custom") {
+                        setCoOwner({
+                          ...coOwner,
+                          permissions: { ...p.permissions },
+                        });
+                      }
+                    }}
+                    className="p-2.5 rounded border border-khaki text-left hover:border-gold hover:bg-gold/5 transition-all flex flex-col justify-between"
+                  >
+                    <div>
+                      <p className="text-xs font-semibold">{p.name}</p>
+                      <span className="text-[10px] text-coffee/60">
+                        {p.badge}
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              <label className="label mb-2">
+                Granular Permissions ({Object.values(coOwner.permissions).filter(Boolean).length} granted)
+              </label>
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                {CO_OWNER_PERMISSIONS.map((perm) => {
+                  const checked = Boolean(coOwner.permissions[perm.key]);
+                  return (
+                    <label
+                      key={perm.key}
+                      className={`flex items-start gap-3 p-2.5 rounded border cursor-pointer transition-all ${
+                        checked
+                          ? "bg-brass/10 border-brass/40"
+                          : "border-khaki/60 hover:bg-black/5"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          setCoOwner({
+                            ...coOwner,
+                            permissions: {
+                              ...coOwner.permissions,
+                              [perm.key]: !coOwner.permissions[perm.key],
+                            },
+                          })
+                        }
+                        className="mt-0.5 rounded text-gold focus:ring-gold"
+                      />
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium">
+                            {perm.label}
+                          </span>
+                          <span className="text-[10px] text-coffee/50 uppercase">
+                            {perm.category}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-coffee/70 mt-0.5">
+                          {perm.description}
+                        </p>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
       <button type="submit" className="btn mt-10" disabled={saving}>
         {saving ? "Submitting..." : "Submit for approval"}

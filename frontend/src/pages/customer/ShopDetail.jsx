@@ -1,12 +1,17 @@
 import { Link, useParams } from "react-router-dom";
-import { ALL_DAYS, scheduleOf } from "../../utils/closedDays";
+import {
+  ALL_DAYS,
+  scheduleOf,
+  isShopOpenNow,
+  getTemporaryClosure,
+  formatDateDisplay,
+} from "../../utils/closedDays";
 import { to12Hour } from "../../utils/time";
 const fmt12 = (v) => {
   const t = to12Hour(v);
   return `${t.time} ${t.period}`;
 };
-import { isShopOpenNow } from "../../utils/closedDays";
-import { Clock, MapPin, ExternalLink } from "lucide-react";
+import { Clock, MapPin, ExternalLink, AlertTriangle } from "lucide-react";
 import { useOwner } from "../../hooks/useOwnerStore";
 import { activeOf, etaFor } from "../../utils/ownerEta";
 import { Badge, Rating, Empty } from "../../components/common/ui";
@@ -19,6 +24,7 @@ export default function ShopDetail() {
   const shop = shops.find(
     (s) => s.id === id && s.status === "approved" && s.active,
   );
+  const closure = getTemporaryClosure(shop);
   useEffect(() => {
     if (!shop?.location) return;
     getCurrentLocation()
@@ -64,10 +70,47 @@ export default function ShopDetail() {
           </p>
           <p className="text-sm text-coffee/70 mt-2">{shop.description}</p>
         </div>
-        <Badge tone={isShopOpenNow(shop) ? "ok" : "alert"}>
-          {isShopOpenNow(shop) ? "Open now" : "Closed"}
+        <Badge
+          tone={
+            closure.isClosed ? "alert" : isShopOpenNow(shop) ? "ok" : "alert"
+          }
+        >
+          {closure.isClosed
+            ? "Temporarily Closed"
+            : isShopOpenNow(shop)
+              ? "Open now"
+              : "Closed"}
         </Badge>
       </div>
+      {closure.isClosed && (
+        <div className="mt-4 p-4 border border-rose/30 bg-rose/10 rounded-md">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="text-rose shrink-0 mt-0.5" size={20} />
+            <div>
+              <div className="font-semibold text-rose text-base">
+                Temporarily Closed for Emergency
+              </div>
+              <p className="text-sm text-coffee/90 mt-1">
+                This shop is closed from {formatDateDisplay(closure.startDate)}{" "}
+                until{" "}
+                <span className="font-semibold">
+                  {formatDateDisplay(closure.endDate) || "further notice"}
+                </span>
+                .
+              </p>
+              {closure.reason ? (
+                <p className="text-sm text-coffee/80 mt-1 italic">
+                  Reason: &ldquo;{closure.reason}&rdquo;
+                </p>
+              ) : null}
+              <p className="text-xs text-coffee/60 mt-2">
+                Queue bookings are currently disabled. Regular service will
+                resume after this closure period.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
       {shop.location?.confirmed && (
         <div className="flex flex-wrap items-center gap-3 mt-3">
           <p className="text-xs text-coffee/60">
@@ -96,13 +139,28 @@ export default function ShopDetail() {
         <div className="space-y-1">
           {ALL_DAYS.map((d) => {
             const e = scheduleOf(shop)[d];
+            const shifts =
+              e.shifts && e.shifts.length
+                ? e.shifts
+                : [{ open: e.open, close: e.close }];
             return (
-              <p key={d} className="flex justify-between max-w-xs">
-                <b>{d}</b>
-                <span>
-                  {e.closed ? "Closed" : `${fmt12(e.open)} - ${fmt12(e.close)}`}
-                </span>
-              </p>
+              <div
+                key={d}
+                className="flex justify-between items-start max-w-sm py-1 border-b border-khaki/30 last:border-0"
+              >
+                <b className="w-12 shrink-0">{d}</b>
+                <div className="text-right flex-1">
+                  {e.closed ? (
+                    <span className="text-rose font-medium">Closed</span>
+                  ) : (
+                    shifts.map((s, idx) => (
+                      <div key={idx} className="text-xs">
+                        {fmt12(s.open)} - {fmt12(s.close)}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
             );
           })}
         </div>
@@ -204,7 +262,12 @@ export default function ShopDetail() {
         ))
       )}
       <div className="sticky bottom-20 md:bottom-4 mt-10 flex justify-end">
-        {isShopOpenNow(shop) ? (
+        {closure.isClosed ? (
+          <button className="btn opacity-60 cursor-not-allowed" disabled>
+            Temporarily closed{" "}
+            {closure.endDate ? `until ${formatDateDisplay(closure.endDate)}` : ""}
+          </button>
+        ) : isShopOpenNow(shop) ? (
           <Link to={`/app/book/${shop.id}`} className="btn shadow-lg">
             Join the queue
           </Link>

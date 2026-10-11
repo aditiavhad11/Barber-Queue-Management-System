@@ -8,6 +8,7 @@ import {
 } from "react";
 import { ownerSeed } from "../data/owner";
 import { api } from "../services/api";
+import { hasPermission } from "../utils/coOwnerPermissions";
 
 const Ctx = createContext(null);
 const ACTIVE_QUEUE_STATUSES = ["Waiting", "Your Turn", "In Service"];
@@ -86,6 +87,7 @@ const normalizeDbShop = (raw) => {
     reviews: raw.reviewsList || raw.reviews || [],
     notifications: raw.notifications || [],
     customers: raw.customers || [],
+    coOwners: raw.coOwners || [],
     policy,
     availability,
     rejection: raw.rejection || raw.rejection_reason || "",
@@ -108,6 +110,7 @@ const blankShop = (s) => ({
   reviewsList: s.reviewsList || [],
   notifications: s.notifications || [],
   customers: s.customers || [],
+  coOwners: s.coOwners || [],
   finished: s.finished || 0,
   status: s.status || "pending",
   approved: s.status === "approved",
@@ -226,8 +229,13 @@ export function OwnerProvider({ children }) {
     ? state.shops.filter((s) => s.ownerId === ownerId).map((s) => s.id)
     : [];
   const sessionShop =
-    sessionRole === "shop"
-      ? state.shops.find((s) => s.id === sessionShopId)
+    sessionRole === "shop" || sessionRole === "co_owner"
+      ? state.shops.find(
+          (s) =>
+            s.id === (sessionShopId || sessionUser?.shopId) ||
+            (sessionRole === "co_owner" &&
+              (s.coOwners || []).some((c) => c.id === sessionUser?.id)),
+        )
       : null;
   const storedOwnerShopId = sessionStorage.getItem("ownerCurrentShopId");
   const selectedOwnerShopId = ownerShopIds.includes(state.currentShopId)
@@ -243,7 +251,9 @@ export function OwnerProvider({ children }) {
     }
   }, [sessionRole, selectedOwnerShopId]);
   const effectiveShopId =
-    sessionRole === "shop" ? sessionShop?.id || null : selectedOwnerShopId;
+    sessionRole === "shop" || sessionRole === "co_owner"
+      ? sessionShop?.id || sessionShopId || sessionUser?.shopId || null
+      : selectedOwnerShopId;
   const current = state.shops.find((x) => x.id === effectiveShopId) || null;
 
   useEffect(() => {
@@ -323,6 +333,10 @@ export function OwnerProvider({ children }) {
                 localShop.finished !== undefined
                   ? localShop.finished
                   : serverShop.finished || 0,
+              coOwners:
+                serverShop.coOwners && serverShop.coOwners.length
+                  ? serverShop.coOwners
+                  : localShop.coOwners || [],
             };
           };
 
@@ -438,30 +452,34 @@ export function OwnerProvider({ children }) {
                 ? s.barbersList
                 : key === "services"
                   ? s.servicesList
-                  : key === "queues"
-                    ? s.queues
-                    : key === "payments"
-                      ? s.payments
-                      : key === "reviews"
-                        ? s.reviewsList
-                        : key === "finished"
-                          ? s.finished
-                          : s.notifications;
+                  : key === "coOwners"
+                    ? s.coOwners || []
+                    : key === "queues"
+                      ? s.queues
+                      : key === "payments"
+                        ? s.payments
+                        : key === "reviews"
+                          ? s.reviewsList
+                          : key === "finished"
+                            ? s.finished
+                            : s.notifications;
             const next = typeof value === "function" ? value(old) : value;
             const patch =
               key === "barbers"
                 ? { barbersList: next, barberCount: next.length, barbers: next }
                 : key === "services"
                   ? { servicesList: next, services: next }
-                  : key === "queues"
-                    ? { queues: next }
-                    : key === "payments"
-                      ? { payments: next }
-                      : key === "reviews"
-                        ? { reviewsList: next, reviews: next }
-                        : key === "finished"
-                          ? { finished: next }
-                          : { notifications: next };
+                  : key === "coOwners"
+                    ? { coOwners: next }
+                    : key === "queues"
+                      ? { queues: next }
+                      : key === "payments"
+                        ? { payments: next }
+                        : key === "reviews"
+                          ? { reviewsList: next, reviews: next }
+                          : key === "finished"
+                            ? { finished: next }
+                            : { notifications: next };
             return { ...s, ...patch };
           }),
         };
@@ -653,6 +671,87 @@ export function OwnerProvider({ children }) {
       else sessionStorage.removeItem("ownerCurrentShopId");
       return { ...p, shops: remaining, currentShopId: nextId };
     });
+  };
+
+  const addCoOwner = async (shopId, coOwnerData) => {
+    try {
+      const res = await api.post(`/shops/${shopId}/co-owners`, coOwnerData);
+      const newCo = res.data.coOwner;
+      setState((p) => ({
+        ...p,
+        shops: p.shops.map((s) =>
+          s.id === shopId
+            ? {
+                ...s,
+                coOwners: [
+                  ...(s.coOwners || []).filter((c) => c.id !== newCo.id),
+                  newCo,
+                ],
+              }
+            : s,
+        ),
+      }));
+      return newCo;
+    } catch (err) {
+      throw new Error(
+        err.response?.data?.message ||
+          err.message ||
+          "Failed to add co-owner.",
+      );
+    }
+  };
+
+  const updateCoOwner = async (shopId, coOwnerId, patchData) => {
+    try {
+      const res = await api.patch(
+        `/shops/${shopId}/co-owners/${coOwnerId}`,
+        patchData,
+      );
+      const updatedCo = res.data.coOwner;
+      setState((p) => ({
+        ...p,
+        shops: p.shops.map((s) =>
+          s.id === shopId
+            ? {
+                ...s,
+                coOwners: (s.coOwners || []).map((c) =>
+                  c.id === coOwnerId ? updatedCo : c,
+                ),
+              }
+            : s,
+        ),
+      }));
+      return updatedCo;
+    } catch (err) {
+      throw new Error(
+        err.response?.data?.message ||
+          err.message ||
+          "Failed to update co-owner.",
+      );
+    }
+  };
+
+  const deleteCoOwner = async (shopId, coOwnerId) => {
+    try {
+      await api.delete(`/shops/${shopId}/co-owners/${coOwnerId}`);
+      setState((p) => ({
+        ...p,
+        shops: p.shops.map((s) =>
+          s.id === shopId
+            ? {
+                ...s,
+                coOwners: (s.coOwners || []).filter((c) => c.id !== coOwnerId),
+              }
+            : s,
+        ),
+      }));
+    } catch (err) {
+      throw new Error(
+        err.response?.data?.message ||
+          err.message ||
+          "Failed to delete co-owner.",
+      );
+    }
   };
 
   const submitShop = async (payload) => {
@@ -1735,6 +1834,11 @@ export function OwnerProvider({ children }) {
     contactCustomer,
     addComplaint,
     saveBarber,
+    coOwners: current?.coOwners || [],
+    addCoOwner,
+    updateCoOwner,
+    deleteCoOwner,
+    hasPermission: (permKey) => hasPermission(sessionUser, permKey),
     pendingBookings,
     myBookings,
     acceptBooking,
