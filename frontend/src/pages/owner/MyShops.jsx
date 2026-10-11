@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useState } from "react";
-import { Plus, MapPin, Clock, Trash2, MessageSquareText, Users } from "lucide-react";
+import { Plus, MapPin, Clock, Trash2, MessageSquareText, Users, CalendarDays } from "lucide-react";
 import { useOwner } from "../../hooks/useOwnerStore";
 import {
   PageHead,
@@ -144,6 +144,13 @@ export default function MyShops() {
                 >
                   <Users size={14} />
                   Co-Owners ({s.coOwners?.length || 0})
+                </button>
+                <button
+                  className="btn-ghost"
+                  onClick={() => openShop(s.id, "/owner/shop/hours")}
+                >
+                  <CalendarDays size={14} />
+                  Annual schedule
                 </button>
                 {s.status === "rejected" ? (
                   <>

@@ -6,6 +6,7 @@ import { PageHead } from "../../components/common/ui";
 import PhotoUploader from "../../components/owner/PhotoUploader";
 import LocationPicker from "../../components/owner/LocationPicker";
 import WeeklyHours from "../../components/owner/WeeklyHours";
+import AnnualSchedule from "../../components/owner/AnnualSchedule";
 import {
   defaultSchedule,
   withSchedule,
@@ -40,7 +41,7 @@ const newBarber = () => ({
 
 export default function CreateShop() {
   const nav = useNavigate();
-  const { submitShop, shops } = useOwner();
+  const { submitShop, owner } = useOwner();
   const [errs, setErrs] = useState({});
   const [saving, setSaving] = useState(false);
   const [uploadingBarber, setUploadingBarber] = useState(null);
@@ -61,6 +62,7 @@ export default function CreateShop() {
   ]);
   const [barbers, setBarbers] = useState([newBarber()]);
   const [schedule, setSchedule] = useState(defaultSchedule("09:00", "21:00"));
+  const [annualSchedules, setAnnualSchedules] = useState({});
   const [pol, setPol] = useState(
     Object.fromEntries(POLICIES.map((p) => [p, ""])),
   );
@@ -178,6 +180,7 @@ export default function CreateShop() {
             { mode: "queue", note: "Walk-in queue during opening hours." },
             schedule,
           ),
+          annualSchedules,
           payment: { upi: true, cash: true },
         },
       });
@@ -263,6 +266,25 @@ export default function CreateShop() {
           schedule={schedule}
           onChange={setSchedule}
           error={errs.hours}
+        />
+        <AnnualSchedule
+          shop={{
+            id: "new-shop",
+            name: f.name || "this shop",
+            ownerId: owner?.id,
+            availability: { annualSchedules },
+          }}
+          shops={[]}
+          onSave={(_shopId, dates, entry) =>
+            setAnnualSchedules((p) => {
+              const next = { ...p };
+              dates.forEach((date) => {
+                if (entry) next[date] = entry;
+                else delete next[date];
+              });
+              return next;
+            })
+          }
         />
         <div className="mt-6 space-y-4">
           <div className="flex items-center justify-between gap-3">

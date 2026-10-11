@@ -57,6 +57,32 @@ export const getTemporaryClosure = (shop, date = new Date()) => {
   };
 };
 
+export const annualSchedulesOf = (shopOrAvailability) => {
+  const availability = shopOrAvailability?.availability || shopOrAvailability || {};
+  const saved = availability?.annualSchedules;
+  if (!saved || typeof saved !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(saved)
+      .filter(([date]) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+      .map(([date, item]) => [
+        date,
+        {
+          type: ["closed", "half_day", "special_hours"].includes(item?.type)
+            ? item.type
+            : "closed",
+          open: String(item?.open || "09:00").slice(0, 5),
+          close: String(item?.close || "21:00").slice(0, 5),
+          note: String(item?.note || "").slice(0, 200),
+        },
+      ]),
+  );
+};
+
+export const annualScheduleForDate = (shop, date = new Date()) =>
+  annualSchedulesOf(shop)[
+    typeof date === "string" ? date : toLocalDateString(date)
+  ] || null;
+
 export const MAX_SHIFTS_PER_DAY = 6;
 
 export const normalizeDayShifts = (dayObj) => {
@@ -87,6 +113,8 @@ export const isClosedToday = (shop, date = new Date()) =>
 
 export const isShopOpenNow = (shop, date = new Date()) => {
   if (getTemporaryClosure(shop, date).isClosed) return false;
+  const annual = annualScheduleForDate(shop, date);
+  if (annual?.type === "closed") return false;
   const openFlag =
     shop?.availability?.isOpen !== undefined
       ? shop.availability.isOpen
@@ -104,6 +132,10 @@ export const isShopOpenNow = (shop, date = new Date()) => {
   const currentH = String(date.getHours()).padStart(2, "0");
   const currentM = String(date.getMinutes()).padStart(2, "0");
   const now = `${currentH}:${currentM}`;
+
+  if (annual && ["half_day", "special_hours"].includes(annual.type)) {
+    return now >= annual.open && now < annual.close;
+  }
 
   const shifts = normalizeDayShifts(sched);
   return shifts.some((s) => now >= s.open && now < s.close);
@@ -241,6 +273,14 @@ export const scheduleError = (schedule) => {
 };
 
 export const todayHoursText = (shop, date = new Date()) => {
+  const annual = annualScheduleForDate(shop, date);
+  if (annual?.type === "closed") {
+    return annual.note ? `Closed: ${annual.note}` : "Closed";
+  }
+  if (annual && ["half_day", "special_hours"].includes(annual.type)) {
+    const label = annual.type === "half_day" ? "Half day" : "Special hours";
+    return `${label}: ${formatShiftDisplay(annual)}${annual.note ? ` (${annual.note})` : ""}`;
+  }
   const d = JS_DAY[date.getDay()];
   const e = scheduleOf(shop)[d];
   if (e.closed) return `${d}: Closed`;

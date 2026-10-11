@@ -40,6 +40,58 @@ const verifyQuote = (token) => {
   }
 };
 
+const localDateKey = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const pick = (type) => parts.find((p) => p.type === type)?.value;
+  return `${pick("year")}-${pick("month")}-${pick("day")}`;
+};
+
+const localTimeKey = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const pick = (type) => parts.find((p) => p.type === type)?.value;
+  return `${pick("hour")}:${pick("minute")}`;
+};
+
+function assertAnnualScheduleAllowsBooking(availability) {
+  const schedules =
+    availability?.annualSchedules && typeof availability.annualSchedules === "object"
+      ? availability.annualSchedules
+      : {};
+  const today = localDateKey();
+  const item = schedules[today];
+  if (!item) return;
+  const type = String(item.type || "closed");
+  const note = String(item.note || "").trim();
+  if (type === "closed") {
+    const suffix = note ? `: ${note}` : ".";
+    throw Object.assign(new Error(`This shop is closed today${suffix}`), {
+      status: 409,
+    });
+  }
+  if (["half_day", "special_hours"].includes(type)) {
+    const open = String(item.open || "09:00").slice(0, 5);
+    const close = String(item.close || "21:00").slice(0, 5);
+    const now = localTimeKey();
+    if (close <= open || now < open || now >= close) {
+      const label = type === "half_day" ? "half-day hours" : "special hours";
+      throw Object.assign(
+        new Error(`This shop is only accepting bookings during ${label} today (${open}-${close}).`),
+        { status: 409 },
+      );
+    }
+  }
+}
+
 function beneficiaryFrom(body, customer) {
   const raw = body?.beneficiary || {};
   if (raw.isSelf === false) {
@@ -103,6 +155,7 @@ async function validateSelection(
       );
     }
   }
+  assertAnnualScheduleAllowsBooking(avail);
 
   if (!shops[0].upi_qr_url)
     throw Object.assign(new Error("This shop can't take bookings yet."), {

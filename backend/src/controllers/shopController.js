@@ -12,6 +12,42 @@ const parseJson = (value, fallback = {}) => {
   }
 };
 
+const localDateKey = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const pick = (type) => parts.find((p) => p.type === type)?.value;
+  return `${pick("year")}-${pick("month")}-${pick("day")}`;
+};
+
+function validateAnnualSchedules(availability = {}) {
+  const schedules =
+    availability?.annualSchedules && typeof availability.annualSchedules === "object"
+      ? availability.annualSchedules
+      : {};
+  const today = localDateKey();
+  for (const [date, item] of Object.entries(schedules)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return "Annual schedule dates must use YYYY-MM-DD.";
+    }
+    if (date < today) return "Past dates cannot be scheduled or modified.";
+    if (!["closed", "half_day", "special_hours"].includes(item?.type)) {
+      return "Choose Closed, Half Day, or Special Hours for each scheduled date.";
+    }
+    if (item.type !== "closed") {
+      const open = String(item.open || "").slice(0, 5);
+      const close = String(item.close || "").slice(0, 5);
+      if (!/^\d{2}:\d{2}$/.test(open) || !/^\d{2}:\d{2}$/.test(close) || close <= open) {
+        return "Scheduled hours must have a valid opening time before closing time.";
+      }
+    }
+  }
+  return "";
+}
+
 /**
  * Bulk insert helper.
  * - `sql` must end with `VALUES ?` (mysql2 expands the nested array into
@@ -65,6 +101,23 @@ async function hydrateShop(row) {
     "SELECT id,name,gender,experience_years,specialization,rating,status,photo_url FROM barbers WHERE shop_id=? ORDER BY id ASC",
     [row.id],
   );
+
+  const [coOwnerRows] = await pool.query(
+    "SELECT id, shop_id, name, email, phone, title, permissions_json, status, created_at, updated_at FROM shop_co_owners WHERE shop_id=? ORDER BY created_at ASC",
+    [row.id],
+  );
+  const coOwners = coOwnerRows.map((c) => ({
+    id: c.id,
+    shopId: c.shop_id,
+    name: c.name,
+    email: c.email,
+    phone: c.phone || "",
+    title: c.title || "Co-Owner",
+    permissions: parseJson(c.permissions_json, {}),
+    status: c.status || "active",
+    createdAt: c.created_at,
+    updatedAt: c.updated_at,
+  }));
 
   let reviewsList = [];
   try {
@@ -181,6 +234,8 @@ export async function createShop(req, res) {
     return res
       .status(400)
       .json({ message: "Shop name, contact and address are required." });
+  const annualError = validateAnnualSchedules(b.availability || {});
+  if (annualError) return res.status(400).json({ message: annualError });
 
   const id = crypto.randomUUID();
 
@@ -376,8 +431,11 @@ export async function updateShop(req, res) {
     add("hours_close", b.hours?.close || "21:00");
   }
 
-  if (b.availability !== undefined)
+  if (b.availability !== undefined) {
+    const annualError = validateAnnualSchedules(b.availability || {});
+    if (annualError) return res.status(400).json({ message: annualError });
     add("availability_json", JSON.stringify(b.availability || {}));
+  }
 
   if (b.policy !== undefined)
     add("policies_json", JSON.stringify(b.policy || {}));
