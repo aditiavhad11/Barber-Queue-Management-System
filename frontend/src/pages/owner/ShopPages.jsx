@@ -21,6 +21,7 @@ import {
   getTemporaryClosure,
 } from "../../utils/closedDays";
 import WeeklyHours from "../../components/owner/WeeklyHours";
+import AnnualSchedule from "../../components/owner/AnnualSchedule";
 import { to12Hour, from12Hour } from "../../utils/time";
 const SaveBar = ({ dirty, onSave, onCancel, saved }) => (
   <div className="flex items-center gap-3 mt-6">
@@ -314,7 +315,7 @@ export function Location() {
   );
 }
 export function Hours() {
-  const { shop, up } = useOwner();
+  const { shop, shops, up, updateShop } = useOwner();
   const x = useDraft(["hours", "availability"]);
   const schedule = scheduleOf({
     availability: x.d.availability,
@@ -325,6 +326,24 @@ export function Hours() {
     x.set("availability", withSchedule(x.d.availability || {}, next));
     x.set("hours", hoursFromSchedule(next));
   };
+  const saveAnnual = (shopId, dates, entry) => {
+    updateShop(shopId, (current) => {
+      const annualSchedules = {
+        ...(current.availability?.annualSchedules || {}),
+      };
+      dates.forEach((date) => {
+        if (entry) annualSchedules[date] = entry;
+        else delete annualSchedules[date];
+      });
+      return {
+        ...current,
+        availability: {
+          ...(current.availability || {}),
+          annualSchedules,
+        },
+      };
+    });
+  };
   return (
     <>
       <PageHead
@@ -333,6 +352,7 @@ export function Hours() {
       />
       <div className="max-w-3xl">
         <WeeklyHours schedule={schedule} onChange={change} error={bad} />
+        <AnnualSchedule shop={shop} shops={shops} onSave={saveAnnual} />
         <SaveBar
           dirty={x.dirty && !bad}
           onSave={x.save}

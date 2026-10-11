@@ -389,17 +389,45 @@ export function OwnerProvider({ children }) {
     };
   }, [sessionRole, sessionUser?.id]);
 
-  const updateShop = (shopId, updater) =>
+  const updateShop = (shopId, updater) => {
+    const existing = state.shops.find((s) => s.id === shopId);
+    const changed = existing
+      ? typeof updater === "function"
+        ? updater(existing)
+        : { ...existing, ...updater }
+      : null;
+    if (!changed) return;
     setState((p) => ({
       ...p,
-      shops: p.shops.map((s) =>
-        s.id === shopId
-          ? typeof updater === "function"
-            ? updater(s)
-            : { ...s, ...updater }
-          : s,
-      ),
+      shops: p.shops.map((s) => {
+        if (s.id !== shopId) return s;
+        return changed;
+      }),
     }));
+    if (sessionRole === "owner" || sessionRole === "shop") {
+      const body = {};
+      [
+        "name",
+        "description",
+        "contact",
+        "address",
+        "location",
+        "hours",
+        "availability",
+        "policy",
+        "photos",
+      ].forEach((k) => {
+        if (changed[k] !== undefined) body[k] = changed[k];
+      });
+      if (Object.keys(body).length) {
+        api
+          .patch(`/shops/${shopId}`, body)
+          .catch((error) =>
+            console.error("Could not persist shop changes:", error),
+          );
+      }
+    }
+  };
 
   const up = (key, value) => {
     setState((p) => {
@@ -694,9 +722,7 @@ export function OwnerProvider({ children }) {
       return newCo;
     } catch (err) {
       throw new Error(
-        err.response?.data?.message ||
-          err.message ||
-          "Failed to add co-owner.",
+        err.response?.data?.message || err.message || "Failed to add co-owner.",
       );
     }
   };
@@ -1819,6 +1845,7 @@ export function OwnerProvider({ children }) {
     sessionShopId,
     currentShopId: effectiveShopId,
     ownerShopIds,
+    updateShop,
     selectShop,
     applyPolicyToAllShops,
     deleteShop,
