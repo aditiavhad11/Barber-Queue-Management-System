@@ -6,13 +6,16 @@ import { PageHead } from "../../components/common/ui";
 import PhotoUploader from "../../components/owner/PhotoUploader";
 import LocationPicker from "../../components/owner/LocationPicker";
 import WeeklyHours from "../../components/owner/WeeklyHours";
+import AnnualSchedule from "../../components/owner/AnnualSchedule";
 import {
   defaultSchedule,
   withSchedule,
   hoursFromSchedule,
   scheduleError,
 } from "../../utils/closedDays";
-import { uploadImage, ACCEPTED, MAX_MB } from "../../services/upload";
+import { ACCEPTED, MAX_MB, uploadImages } from "../../services/upload";
+import { api } from "../../services/api";
+import { notifyError, notifySuccess } from "../../utils/toast";
 import {
   CO_OWNER_PERMISSIONS,
   PERMISSION_PRESETS,
@@ -40,10 +43,9 @@ const newBarber = () => ({
 
 export default function CreateShop() {
   const nav = useNavigate();
-  const { submitShop, shops } = useOwner();
+  const { submitShop, owner } = useOwner();
   const [errs, setErrs] = useState({});
   const [saving, setSaving] = useState(false);
-  const [uploadingBarber, setUploadingBarber] = useState(null);
   const [f, setF] = useState({
     name: "",
     contact: "",
@@ -61,6 +63,7 @@ export default function CreateShop() {
   ]);
   const [barbers, setBarbers] = useState([newBarber()]);
   const [schedule, setSchedule] = useState(defaultSchedule("09:00", "21:00"));
+  const [annualSchedules, setAnnualSchedules] = useState({});
   const [pol, setPol] = useState(
     Object.fromEntries(POLICIES.map((p) => [p, ""])),
   );
@@ -80,7 +83,7 @@ export default function CreateShop() {
     setBarbers((list) =>
       list.map((b) => (b.id === id ? { ...b, ...patch } : b)),
     );
-  const addBarberPhoto = async (id, file) => {
+  const addBarberPhoto = (id, file) => {
     if (!file) return;
     if (!ACCEPTED.includes(file.type))
       return setErrs((p) => ({
@@ -92,16 +95,11 @@ export default function CreateShop() {
         ...p,
         [`barber-${id}`]: `Image must be smaller than ${MAX_MB} MB.`,
       }));
-    setUploadingBarber(id);
-    try {
-      const upImg = await uploadImage(file, "barber-queue/barbers");
-      updateBarber(id, { photo: upImg.url });
-      setErrs((p) => ({ ...p, [`barber-${id}`]: "" }));
-    } catch (e) {
-      setErrs((p) => ({ ...p, [`barber-${id}`]: e.message }));
-    } finally {
-      setUploadingBarber(null);
-    }
+    updateBarber(id, {
+      photo: URL.createObjectURL(file),
+      photoFile: file,
+    });
+    setErrs((p) => ({ ...p, [`barber-${id}`]: "" }));
   };
 
   const submit = async (e) => {
@@ -149,6 +147,29 @@ export default function CreateShop() {
       enabled: true,
     }));
     try {
+      const uploadItems = [
+        ...photos.map((photo) => ({
+          file: photo.file,
+          folder: "barber-queue/shops",
+        })),
+        ...barbers
+          .filter((barber) => barber.photoFile)
+          .map((barber) => ({
+            file: barber.photoFile,
+            folder: "barber-queue/barbers",
+          })),
+      ];
+      const uploaded = await uploadImages(uploadItems, api);
+      const uploadedShopPhotos = uploaded.slice(0, photos.length).map((image, index) => ({
+        ...image,
+        primary: photos[index].primary,
+      }));
+      let barberUploadIndex = photos.length;
+      const uploadedBarbers = barbers.map((barber) => {
+        if (!barber.photoFile) return { ...barber, photoFile: undefined };
+        const image = uploaded[barberUploadIndex++];
+        return { ...barber, photo: image.url, photoFile: undefined };
+      });
       await submitShop({
         name: f.name,
         description: f.description,
@@ -156,10 +177,10 @@ export default function CreateShop() {
         address: f.address,
         location: loc,
         hours: hoursFromSchedule(schedule),
-        photos,
+        photos: uploadedShopPhotos,
         policy: pol,
         barberCount: barbers.length,
-        barbers: barbers.map(({ id, ...b }) => b),
+        barbers: uploadedBarbers.map(({ id, photoFile, ...b }) => b),
         services,
         coOwners: hasCoOwner
           ? [
@@ -178,15 +199,16 @@ export default function CreateShop() {
             { mode: "queue", note: "Walk-in queue during opening hours." },
             schedule,
           ),
+          annualSchedules,
           payment: { upi: true, cash: true },
         },
       });
+      notifySuccess("Shop submitted for approval.");
       nav("/owner/shops");
     } catch (error) {
-      setErrs((p) => ({
-        ...p,
-        submit: error.message || "Could not create the shop.",
-      }));
+      // API failures already surface through the global error toast.
+      if (!error?.response)
+        notifyError(error.message || "Could not create the shop.");
     } finally {
       setSaving(false);
     }
@@ -264,6 +286,25 @@ export default function CreateShop() {
           onChange={setSchedule}
           error={errs.hours}
         />
+        <AnnualSchedule
+          shop={{
+            id: "new-shop",
+            name: f.name || "this shop",
+            ownerId: owner?.id,
+            availability: { annualSchedules },
+          }}
+          shops={[]}
+          onSave={(_shopId, dates, entry) =>
+            setAnnualSchedules((p) => {
+              const next = { ...p };
+              dates.forEach((date) => {
+                if (entry) next[date] = entry;
+                else delete next[date];
+              });
+              return next;
+            })
+          }
+        />
         <div className="mt-6 space-y-4">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -316,16 +357,13 @@ export default function CreateShop() {
                 </div>
                 <label className="btn-ghost cursor-pointer">
                   <Upload size={16} />
-                  {uploadingBarber === b.id
-                    ? "Uploading..."
-                    : b.photo
+                  {b.photo
                       ? "Replace photo"
                       : "Upload photo"}
                   <input
                     type="file"
                     hidden
                     accept={ACCEPTED.join(",")}
-                    disabled={uploadingBarber === b.id}
                     onChange={(e) => {
                       addBarberPhoto(b.id, e.target.files?.[0]);
                       e.target.value = "";

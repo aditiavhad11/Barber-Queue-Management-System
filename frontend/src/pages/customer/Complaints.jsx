@@ -4,6 +4,7 @@ import { useOwner } from "../../hooks/useOwnerStore";
 import { api } from "../../services/api";
 import { Empty } from "../../components/common/ui";
 import { relativeTime } from "../../utils/relativeTime";
+import { notifyError, notifySuccess } from "../../utils/toast";
 export default function Complaints() {
   const { shops } = useOwner();
   const [customerComplaints, setCustomerComplaints] = useState([]);
@@ -51,6 +52,14 @@ export default function Complaints() {
     } finally {
       setSaving(false);
     }
+    if (!f.shopId || !f.subject.trim() || !f.description.trim()) {
+      notifyError("Select a shop and fill in the subject and description.");
+      return;
+    }
+    addComplaint(f);
+    setF({ shopId: "", issueType: "Service", subject: "", description: "" });
+    setOpen(false);
+    notifySuccess("Your complaint has been submitted.");
   };
   return (
     <div className="fade max-w-3xl">

@@ -3,13 +3,13 @@ import { Link } from "react-router-dom";
 import { MessageSquareWarning } from "lucide-react";
 import { useOwner } from "../../hooks/useOwnerStore";
 import { Empty, Rating, Badge } from "../../components/common/ui";
+import { notifyError, notifySuccess } from "../../utils/toast";
 
 export default function CustomerReviews() {
   const { completedCustomerVisits, addReview } = useOwner();
   const [drafts, setDrafts] = useState({});
   const [saved, setSaved] = useState({});
   const [submitting, setSubmitting] = useState({});
-  const [errors, setErrors] = useState({});
 
   if (!completedCustomerVisits.length) {
     return (
@@ -99,7 +99,6 @@ export default function CustomerReviews() {
                           ...p,
                           [visit.entry.id]: true,
                         }));
-                        setErrors((p) => ({ ...p, [visit.entry.id]: "" }));
                         let ok = false;
                         try {
                           ok = await addReview({
@@ -117,12 +116,11 @@ export default function CustomerReviews() {
                         }));
                         if (ok) {
                           setSaved((p) => ({ ...p, [visit.entry.id]: true }));
+                          notifySuccess("Review submitted successfully.");
                         } else {
-                          setErrors((p) => ({
-                            ...p,
-                            [visit.entry.id]:
-                              "This review could not be submitted. Please refresh and try again.",
-                          }));
+                          notifyError(
+                            "This review could not be submitted. Please refresh and try again.",
+                          );
                         }
                       }}
                     >
@@ -138,11 +136,6 @@ export default function CustomerReviews() {
                       Report an issue instead
                     </Link>
                   </div>
-                  {errors[visit.entry.id] && (
-                    <p className="text-sm text-rose mt-3">
-                      {errors[visit.entry.id]}
-                    </p>
-                  )}
                 </div>
               )}
             </section>

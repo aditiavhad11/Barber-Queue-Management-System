@@ -129,3 +129,46 @@ option {
 .ov-card {
   @apply bg-card border border-khaki rounded-md p-5 md:p-6 h-full;
 }
+
+/* react-toastify, themed to match the barber palette */
+.Toastify__toast {
+  border-radius: 0.375rem;
+  font-family: inherit;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  padding: 14px 16px;
+  box-shadow: 0 10px 30px rgba(43, 33, 28, 0.18);
+}
+.Toastify__toast--success {
+  background: #2f4a3e;
+  color: #f4ede3;
+}
+.Toastify__toast--error {
+  background: #8c4a52;
+  color: #f4ede3;
+}
+.Toastify__toast--info {
+  background: #b39a6a;
+  color: #2b211c;
+}
+.Toastify__toast--warning {
+  background: #c3ad80;
+  color: #2b211c;
+}
+.Toastify__toast--success .Toastify__progress-bar {
+  background: #c3ad80;
+}
+.Toastify__toast--error .Toastify__progress-bar {
+  background: #f4ede3;
+}
+.Toastify__close-button {
+  color: inherit;
+  opacity: 0.65;
+}
+.Toastify__close-button:hover,
+.Toastify__close-button:focus {
+  opacity: 1;
+}
+.Toastify__toast-icon svg {
+  fill: currentColor;
+}

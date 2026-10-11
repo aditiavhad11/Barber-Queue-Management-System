@@ -282,13 +282,13 @@ export function OwnerProvider({ children }) {
       try {
         const shopsReq =
           sessionRole === "owner"
-            ? api.get("/shops/mine")
+            ? api.get("/shops/mine", { toastOnError: false })
             : sessionRole === "admin"
-              ? api.get("/shops/admin/all")
-              : api.get("/shops");
+              ? api.get("/shops/admin/all", { toastOnError: false })
+              : api.get("/shops", { toastOnError: false });
         const usersReq =
           sessionRole === "admin"
-            ? api.get("/auth/users")
+            ? api.get("/auth/users", { toastOnError: false })
             : Promise.resolve(null);
         const [shopsRes, usersRes] = await Promise.allSettled([
           shopsReq,
@@ -389,17 +389,45 @@ export function OwnerProvider({ children }) {
     };
   }, [sessionRole, sessionUser?.id]);
 
-  const updateShop = (shopId, updater) =>
+  const updateShop = (shopId, updater) => {
+    const existing = state.shops.find((s) => s.id === shopId);
+    const changed = existing
+      ? typeof updater === "function"
+        ? updater(existing)
+        : { ...existing, ...updater }
+      : null;
+    if (!changed) return;
     setState((p) => ({
       ...p,
-      shops: p.shops.map((s) =>
-        s.id === shopId
-          ? typeof updater === "function"
-            ? updater(s)
-            : { ...s, ...updater }
-          : s,
-      ),
+      shops: p.shops.map((s) => {
+        if (s.id !== shopId) return s;
+        return changed;
+      }),
     }));
+    if (sessionRole === "owner" || sessionRole === "shop") {
+      const body = {};
+      [
+        "name",
+        "description",
+        "contact",
+        "address",
+        "location",
+        "hours",
+        "availability",
+        "policy",
+        "photos",
+      ].forEach((k) => {
+        if (changed[k] !== undefined) body[k] = changed[k];
+      });
+      if (Object.keys(body).length) {
+        api
+          .patch(`/shops/${shopId}`, body, { toastOnError: false })
+          .catch((error) =>
+            console.error("Could not persist shop changes:", error),
+          );
+      }
+    }
+  };
 
   const up = (key, value) => {
     setState((p) => {
@@ -509,7 +537,7 @@ export function OwnerProvider({ children }) {
         });
         if (Object.keys(body).length) {
           api
-            .patch(`/shops/${id}`, body)
+            .patch(`/shops/${id}`, body, { toastOnError: false })
             .catch((error) =>
               console.error("Could not persist shop changes:", error),
             );
@@ -629,7 +657,7 @@ export function OwnerProvider({ children }) {
       .map((x) => x.id);
     if (!ids.length) throw new Error("No shops found for this owner.");
     const results = await Promise.allSettled(
-      ids.map((id) => api.patch(`/shops/${id}`, { policy })),
+      ids.map((id) => api.patch(`/shops/${id}`, { policy }, { toastOnError: false })),
     );
     const okIds = ids.filter((_, i) => results[i].status === "fulfilled");
     setState((p) => ({
@@ -694,9 +722,7 @@ export function OwnerProvider({ children }) {
       return newCo;
     } catch (err) {
       throw new Error(
-        err.response?.data?.message ||
-          err.message ||
-          "Failed to add co-owner.",
+        err.response?.data?.message || err.message || "Failed to add co-owner.",
       );
     }
   };
@@ -869,7 +895,11 @@ export function OwnerProvider({ children }) {
       ?.queues?.[barberId]?.find((e) => e.id === entryId);
     if (live?.bookingId && sessionStorage.getItem("token")) {
       api
-        .patch(`/bookings/${live.bookingId}/queue-status`, { status })
+        .patch(
+          `/bookings/${live.bookingId}/queue-status`,
+          { status },
+          { toastOnError: false },
+        )
         .then(() => syncRef.current?.())
         .catch((error) =>
           console.error(
@@ -1186,12 +1216,16 @@ export function OwnerProvider({ children }) {
       return false;
     const cleanText = String(text || "").trim();
     try {
-      const { data } = await api.post("/reviews", {
-        shopId,
-        queueId,
-        rating: +rating,
-        text: cleanText,
-      });
+      const { data } = await api.post(
+        "/reviews",
+        {
+          shopId,
+          queueId,
+          rating: +rating,
+          text: cleanText,
+        },
+        { toastOnError: false },
+      );
       const service = shopTarget.servicesList.find(
         (x) => x.id === entry.service,
       );
@@ -1533,11 +1567,12 @@ export function OwnerProvider({ children }) {
     const run = async () => {
       try {
         const [notes, bookings, queueRows] = await Promise.all([
-          api.get("/notifications/mine"),
+          api.get("/notifications/mine", { toastOnError: false }),
           api.get(
             sessionRole === "customer" ? "/bookings/mine" : "/bookings/pending",
+            { toastOnError: false },
           ),
-          api.get("/bookings/queue"),
+          api.get("/bookings/queue", { toastOnError: false }),
         ]);
         if (stopped) return;
         mergeQueue(queueRows.data || []);
@@ -1819,6 +1854,7 @@ export function OwnerProvider({ children }) {
     sessionShopId,
     currentShopId: effectiveShopId,
     ownerShopIds,
+    updateShop,
     selectShop,
     applyPolicyToAllShops,
     deleteShop,
@@ -1848,6 +1884,7 @@ export function OwnerProvider({ children }) {
     customerQueue,
     customerComplaints: state.customerComplaints || [],
     completedCustomerVisits,
+    addReview,
     customerQueues,
     cancelCustomerQueue,
   };

@@ -1,11 +1,12 @@
 import { useRef, useState } from "react";
 import { Upload, X, Star } from "lucide-react";
-import { uploadImage, ACCEPTED, MAX_MB } from "../../services/upload";
+import { ACCEPTED, MAX_MB } from "../../services/upload";
+import { notifyError } from "../../utils/toast";
 export default function PhotoUploader({ photos, onChange, error }) {
   const ref = useRef();
-  const [errs, setErrs] = useState([]);
   const [busy, setBusy] = useState(false);
-  const add = async (files) => {
+
+  const add = (files) => {
     const e = [],
       ok = [];
     [...files].forEach((f) => {
@@ -15,21 +16,31 @@ export default function PhotoUploader({ photos, onChange, error }) {
         e.push(`${f.name}: larger than ${MAX_MB} MB.`);
       else ok.push(f);
     });
-    setErrs(e);
+    e.forEach((m) => notifyError(m));
     if (!ok.length) return;
     setBusy(true);
-    const up = await Promise.all(ok.map(uploadImage));
-    setBusy(false);
+    const up = ok.map((file) => ({
+      id: crypto.randomUUID(),
+      url: URL.createObjectURL(file),
+      file,
+      primary: false,
+      name: file.name,
+      type: file.type,
+    }));
     const all = [...photos, ...up];
     if (!all.some((p) => p.primary)) all[0].primary = true;
     onChange(all);
+    setBusy(false);
   };
   const remove = (id) => {
+    const removed = photos.find((p) => p.id === id);
+    if (removed?.file) URL.revokeObjectURL(removed.url);
     let n = photos.filter((p) => p.id !== id);
     if (n.length && !n.some((p) => p.primary))
       n[0] = { ...n[0], primary: true };
     onChange(n);
   };
+
   return (
     <div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -83,11 +94,7 @@ export default function PhotoUploader({ photos, onChange, error }) {
       <p className="text-xs text-coffee/60 mt-2">
         JPG, PNG or WebP, up to {MAX_MB} MB each.
       </p>
-      {[...errs, ...(error ? [error] : [])].map((m) => (
-        <p key={m} className="text-sm text-rose mt-1">
-          {m}
-        </p>
-      ))}
+      {error && <p className="text-sm text-rose mt-1">{error}</p>}
     </div>
   );
 }

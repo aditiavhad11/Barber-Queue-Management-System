@@ -1,4 +1,5 @@
 import axios from "axios";
+import { notifyError } from "../utils/toast";
 // Ready for backend: set VITE_API_URL. Pages read from /src/data via mock helpers for now.
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || "/api",
@@ -16,16 +17,19 @@ api.interceptors.response.use(
   (r) => r,
   (error) => {
     const url = String(error.config?.url || "");
-    if (
-      error.response?.status === 401 &&
-      sessionStorage.getItem("token") &&
-      !url.includes("/auth/")
-    ) {
+    // Requests can opt out of the automatic failure toast (e.g. background polling)
+    // by passing { toastOnError: false } in their axios config.
+    const showToast = error.config?.toastOnError !== false;
+    const status = error.response?.status;
+
+    if (status === 401 && sessionStorage.getItem("token") && !url.includes("/auth/")) {
       const role = sessionStorage.getItem("role");
       ["token", "role", "shopId", "user", "ownerCurrentShopId"].forEach((k) =>
         sessionStorage.removeItem(k),
       );
       window.dispatchEvent(new Event("barber-auth-change"));
+      if (showToast)
+        notifyError("Your session has expired. Please sign in again.");
       const target =
         role === "shop"
           ? "/shop-sign-in"
@@ -36,7 +40,15 @@ api.interceptors.response.use(
               : "/sign-in";
       if (window.location.pathname + window.location.search !== target)
         window.location.assign(target);
+    } else if (showToast) {
+      notifyError(
+        error.response?.data?.message ||
+          error.message ||
+          "Something went wrong. Please try again.",
+      );
     }
+
     return Promise.reject(error);
   },
 );
+

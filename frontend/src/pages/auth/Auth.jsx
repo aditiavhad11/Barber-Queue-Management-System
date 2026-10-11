@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../hooks/useAuth";
+import { notifyError, notifySuccess } from "../../utils/toast";
 
 const EMAIL_REGEX =
   /^[A-Z0-9.!#$%&'+\/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$/i;
@@ -58,9 +59,10 @@ export default function Auth({ mode }) {
       setDevOtp(result?.devOtp || "");
       setStep("otp");
       setSent(true);
+      notifySuccess("We sent a 6-digit code to your email.");
       setTimeout(() => setSent(false), 2500);
     } catch (error) {
-      setErr(error.message);
+      notifyError(error.message);
     } finally {
       setBusy(false);
     }
@@ -90,7 +92,7 @@ export default function Auth({ mode }) {
             : "/app",
       );
     } catch (error) {
-      setErr(error.message);
+      notifyError(error.message);
     } finally {
       setBusy(false);
     }
@@ -124,7 +126,7 @@ export default function Auth({ mode }) {
             : "/app",
       );
     } catch (error) {
-      setErr(error.message);
+      notifyError(error.message);
     } finally {
       setBusy(false);
     }

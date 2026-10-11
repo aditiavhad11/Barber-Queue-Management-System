@@ -21,7 +21,9 @@ import {
   getTemporaryClosure,
 } from "../../utils/closedDays";
 import WeeklyHours from "../../components/owner/WeeklyHours";
+import AnnualSchedule from "../../components/owner/AnnualSchedule";
 import { to12Hour, from12Hour } from "../../utils/time";
+import { notifyError, notifySuccess } from "../../utils/toast";
 const SaveBar = ({ dirty, onSave, onCancel, saved }) => (
   <div className="flex items-center gap-3 mt-6">
     <button className="btn" disabled={!dirty} onClick={onSave}>
@@ -314,7 +316,7 @@ export function Location() {
   );
 }
 export function Hours() {
-  const { shop, up } = useOwner();
+  const { shop, shops, up, updateShop } = useOwner();
   const x = useDraft(["hours", "availability"]);
   const schedule = scheduleOf({
     availability: x.d.availability,
@@ -325,6 +327,24 @@ export function Hours() {
     x.set("availability", withSchedule(x.d.availability || {}, next));
     x.set("hours", hoursFromSchedule(next));
   };
+  const saveAnnual = (shopId, dates, entry) => {
+    updateShop(shopId, (current) => {
+      const annualSchedules = {
+        ...(current.availability?.annualSchedules || {}),
+      };
+      dates.forEach((date) => {
+        if (entry) annualSchedules[date] = entry;
+        else delete annualSchedules[date];
+      });
+      return {
+        ...current,
+        availability: {
+          ...(current.availability || {}),
+          annualSchedules,
+        },
+      };
+    });
+  };
   return (
     <>
       <PageHead
@@ -333,6 +353,7 @@ export function Hours() {
       />
       <div className="max-w-3xl">
         <WeeklyHours schedule={schedule} onChange={change} error={bad} />
+        <AnnualSchedule shop={shop} shops={shops} onSave={saveAnnual} />
         <SaveBar
           dirty={x.dirty && !bad}
           onSave={x.save}
@@ -357,15 +378,13 @@ export function Policies() {
   const empty = Object.values(x.d.policy).some((v) => !v.trim());
   const mine = shops.filter((s) => s.ownerId === owner?.id);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
   const applyAll = async () => {
     setBusy(true);
-    setMsg("");
     try {
       const n = await applyPolicyToAllShops(x.d.policy);
-      setMsg(`These policies now apply to all ${n} of your shops.`);
+      notifySuccess(`These policies now apply to all ${n} of your shops.`);
     } catch (e) {
-      setMsg(e.message);
+      notifyError(e.message);
     } finally {
       setBusy(false);
     }
@@ -409,7 +428,6 @@ export function Policies() {
                 ? "Applying..."
                 : `Apply these policies to all my shops (${mine.length})`}
             </button>
-            {msg && <p className="text-sm mt-2">{msg}</p>}
           </div>
         )}
       </div>

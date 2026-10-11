@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { ToastContainer } from "react-toastify";
 import PublicLayout from "./layouts/PublicLayout";
 import CustomerLayout from "./layouts/CustomerLayout";
 import Landing from "./pages/public/Landing";
@@ -236,6 +237,17 @@ export default function App() {
 
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
+        <ToastContainer
+          position="top-right"
+          autoClose={4000}
+          newestOnTop
+          closeOnClick
+          pauseOnFocusLoss
+          draggable
+          pauseOnHover
+          theme="colored"
+          limit={4}
+        />
       </BrowserRouter>
     </OwnerProvider>
   );

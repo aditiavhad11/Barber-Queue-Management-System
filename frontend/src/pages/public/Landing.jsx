@@ -38,7 +38,7 @@ export default function Landing() {
           <p className="label !text-gold mb-5">
             Skip the wait, keep your place
           </p>
-          <h1 className="text-5xl md:text-7xl leading-[1.02]">
+          <h1 className="text-5xl md:text-7xl leading-[1.02] text-white">
             Your time matters.
             <br />
             Your barber is ready.

@@ -2,30 +2,21 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Users,
-  UserCheck,
-  ShieldCheck,
-  Key,
   Phone,
   Mail,
   Plus,
   Trash2,
   Edit3,
-  Lock,
-  CheckCircle2,
-  AlertCircle,
   Eye,
   EyeOff,
-  Sparkles,
-  Shield,
-  Layers,
 } from "lucide-react";
 import { useOwner } from "../../hooks/useOwnerStore";
 import { PageHead, StatusBadge, Empty, Modal } from "../../components/common/ui";
+import { notifyError, notifySuccess } from "../../utils/toast";
 import {
   CO_OWNER_PERMISSIONS,
   PERMISSION_PRESETS,
   DEFAULT_PERMISSIONS,
-  summarizePermissions,
 } from "../../utils/coOwnerPermissions";
 
 export default function CoOwners() {
@@ -35,8 +26,6 @@ export default function CoOwners() {
   const [editingCoOwner, setEditingCoOwner] = useState(null);
   const [showPassword, setShowPassword] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [errorMsg, setErrorMsg] = useState("");
-  const [successMsg, setSuccessMsg] = useState("");
 
   const [form, setForm] = useState({
     name: "",
@@ -60,7 +49,6 @@ export default function CoOwners() {
       permissions: { ...DEFAULT_PERMISSIONS },
     });
     setShowPassword(false);
-    setErrorMsg("");
     setModalOpen(true);
   };
 
@@ -79,7 +67,6 @@ export default function CoOwners() {
       },
     });
     setShowPassword(false);
-    setErrorMsg("");
     setModalOpen(true);
   };
 
@@ -104,23 +91,21 @@ export default function CoOwners() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!shop) return;
-    setErrorMsg("");
-    setSuccessMsg("");
 
     if (!form.name.trim()) {
-      setErrorMsg("Please enter the co-owner's full name.");
+      notifyError("Please enter the co-owner's full name.");
       return;
     }
     if (!form.email.trim() || !form.email.includes("@")) {
-      setErrorMsg("Please enter a valid email address.");
+      notifyError("Please enter a valid email address.");
       return;
     }
     if (!form.phone.trim()) {
-      setErrorMsg("Please enter a contact phone number.");
+      notifyError("Please enter a contact phone number.");
       return;
     }
     if (!editingCoOwner && (!form.password || form.password.length < 6)) {
-      setErrorMsg("Password must be at least 6 characters for login access.");
+      notifyError("Password must be at least 6 characters for login access.");
       return;
     }
 
@@ -139,7 +124,7 @@ export default function CoOwners() {
           payload.password = form.password;
         }
         await updateCoOwner(shop.id, editingCoOwner.id, payload);
-        setSuccessMsg(`Updated permissions for ${form.name}.`);
+        notifySuccess(`Updated permissions for ${form.name}.`);
       } else {
         await addCoOwner(shop.id, {
           name: form.name.trim(),
@@ -150,11 +135,11 @@ export default function CoOwners() {
           status: "active",
           permissions: form.permissions,
         });
-        setSuccessMsg(`Co-owner ${form.name} added successfully.`);
+        notifySuccess(`Co-owner ${form.name} added successfully.`);
       }
       setModalOpen(false);
-    } catch (err) {
-      setErrorMsg(err.message || "Could not save co-owner details.");
+    } catch {
+      // Failures surface through the global API error toast.
     } finally {
       setSaving(false);
     }
@@ -164,8 +149,11 @@ export default function CoOwners() {
     const nextStatus = co.status === "active" ? "inactive" : "active";
     try {
       await updateCoOwner(shop.id, co.id, { status: nextStatus });
-    } catch (err) {
-      alert(err.message || "Could not update status.");
+      notifySuccess(
+        `${co.name} is now ${nextStatus}.`,
+      );
+    } catch {
+      // Failures surface through the global API error toast.
     }
   };
 
@@ -176,9 +164,9 @@ export default function CoOwners() {
     if (!ok) return;
     try {
       await deleteCoOwner(shop.id, co.id);
-      setSuccessMsg(`Removed ${co.name} from ${shop.name}.`);
-    } catch (err) {
-      alert(err.message || "Could not remove co-owner.");
+      notifySuccess(`Removed ${co.name} from ${shop.name}.`);
+    } catch {
+      // Failures surface through the global API error toast.
     }
   };
 
@@ -211,21 +199,6 @@ export default function CoOwners() {
           </button>
         }
       />
-
-      {successMsg && (
-        <div className="mb-6 p-4 rounded-md border border-olive/30 bg-olive/10 text-olive flex items-center justify-between">
-          <span className="flex items-center gap-2">
-            <CheckCircle2 size={18} />
-            {successMsg}
-          </span>
-          <button
-            className="text-xs uppercase tracking-wider font-semibold hover:underline"
-            onClick={() => setSuccessMsg("")}
-          >
-            Dismiss
-          </button>
-        </div>
-      )}
 
       {/* Metrics Banner */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
@@ -415,12 +388,6 @@ export default function CoOwners() {
           onClose={() => !saving && setModalOpen(false)}
         >
           <form onSubmit={handleSubmit} className="space-y-4">
-            {errorMsg && (
-              <div className="p-3 rounded bg-rose/10 border border-rose/30 text-rose text-sm flex items-center gap-2">
-                <AlertCircle size={16} />
-                {errorMsg}
-              </div>
-            )}
 
             <div className="grid md:grid-cols-2 gap-3">
               <div>
