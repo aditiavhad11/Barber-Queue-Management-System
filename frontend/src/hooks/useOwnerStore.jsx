@@ -910,6 +910,66 @@ export function OwnerProvider({ children }) {
     }
     applyQueueStatus(shopId, barberId, entryId, status, extra);
   };
+  const queueAction = (shopId, barberId, entryId, action, targetPosition) => {
+    const live = state.shops
+      .find((s) => s.id === shopId)
+      ?.queues?.[barberId]?.find((e) => e.id === entryId);
+    if (!live) return;
+    if (live.bookingId && sessionStorage.getItem("token")) {
+      api
+        .patch(
+          `/bookings/${live.bookingId}/queue-status`,
+          {
+            action,
+            ...(action === "swap" && targetPosition
+              ? { targetPosition }
+              : {}),
+          },
+          { toastOnError: false },
+        )
+        .then(() => syncRef.current?.())
+        .catch((error) =>
+          console.error(
+            "Could not save queue action:",
+            error.response?.data?.message || error.message,
+          ),
+        );
+    }
+    setState((p) => {
+      const target = p.shops.find((s) => s.id === shopId);
+      let queue = [...(target?.queues?.[barberId] || [])];
+      const index = queue.findIndex((e) => e.id === entryId);
+      if (index < 0 || queue[index].status !== "Your Turn") return p;
+      if (action === "remove") queue[index] = { ...queue[index], status: "Cancelled" };
+      else if (action === "swap") {
+        const waiting = queue.filter((e) => e.status === "Waiting");
+        const insertionIndex = Number(targetPosition) - 1;
+        if (insertionIndex < 1 || insertionIndex > waiting.length) return p;
+        const currentEntry = queue[index];
+        const moved = {
+          ...currentEntry,
+          status: "Waiting",
+          skippedAt: new Date().toISOString(),
+          skipCount: (currentEntry.skipCount || 0) + 1,
+        };
+        waiting.splice(insertionIndex, 0, moved);
+        queue = waiting;
+      } else {
+        const [movingEntry] = queue.splice(index, 1);
+        const moving = { ...movingEntry };
+        moving.status = "Waiting";
+        moving.skippedAt = new Date().toISOString();
+        moving.skipCount = (moving.skipCount || 0) + 1;
+        queue.push(moving);
+      }
+      const nextShops = p.shops.map((s) =>
+        s.id === shopId
+          ? { ...s, queues: { ...s.queues, [barberId]: normalizeQueue(queue) } }
+          : s,
+      );
+      return { ...p, shops: nextShops };
+    });
+  };
   const applyQueueStatus = (shopId, barberId, entryId, status, extra = {}) =>
     setState((p) => {
       const target = p.shops.find((s) => s.id === shopId);
@@ -1866,6 +1926,7 @@ export function OwnerProvider({ children }) {
     addServiceToShop,
     addServiceToAllShops,
     setQueueStatus,
+    queueAction,
     addServiceToQueue,
     contactCustomer,
     addComplaint,

@@ -1,7 +1,25 @@
+-- =====================================================================
+-- barber_queue : complete schema (merged)
+-- Includes: schema.sql + add_password_auth + add_upi_qr_payment +
+--           add_queue_reviews + add_service_unavailability +
+--           add_complaint_details_and_resolution + add_complaint_target_routing
+--
+-- Safe to run on:
+--   * a fresh server       -> Part 1 creates everything, Part 2 is a no-op
+--   * an existing database -> Part 1 skips tables that exist, Part 2 adds
+--                             any missing columns / indexes and backfills
+-- Re-running is harmless (fully idempotent). Requires MySQL 8.0.16+.
+-- =====================================================================
+
+DROP DATABASE IF EXISTS barber_queue;
 CREATE DATABASE IF NOT EXISTS barber_queue CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE barber_queue;
 
-CREATE TABLE users (
+-- =====================================================================
+-- PART 1 : TABLES (final shape, FK-safe creation order)
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS users (
   id CHAR(36) PRIMARY KEY,
   name VARCHAR(120) NOT NULL,
   email VARCHAR(190) NOT NULL UNIQUE,
@@ -12,7 +30,7 @@ CREATE TABLE users (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
-CREATE TABLE otp_codes (
+CREATE TABLE IF NOT EXISTS otp_codes (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   email VARCHAR(190) NOT NULL,
   role ENUM('customer','owner','admin') NOT NULL,
@@ -23,7 +41,7 @@ CREATE TABLE otp_codes (
   INDEX idx_otp_expiry (expires_at)
 ) ENGINE=InnoDB;
 
-CREATE TABLE shops (
+CREATE TABLE IF NOT EXISTS shops (
   id CHAR(36) PRIMARY KEY,
   owner_id CHAR(36) NOT NULL,
   name VARCHAR(160) NOT NULL,
@@ -51,7 +69,7 @@ CREATE TABLE shops (
   INDEX idx_shop_status (status, active)
 ) ENGINE=InnoDB;
 
-CREATE TABLE shop_photos (
+CREATE TABLE IF NOT EXISTS shop_photos (
   id CHAR(36) PRIMARY KEY,
   shop_id CHAR(36) NOT NULL,
   url TEXT NOT NULL,
@@ -61,7 +79,7 @@ CREATE TABLE shop_photos (
   INDEX idx_photo_shop (shop_id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE services (
+CREATE TABLE IF NOT EXISTS services (
   id CHAR(36) PRIMARY KEY,
   shop_id CHAR(36) NOT NULL,
   name VARCHAR(120) NOT NULL,
@@ -72,7 +90,7 @@ CREATE TABLE services (
   INDEX idx_service_shop (shop_id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE barbers (
+CREATE TABLE IF NOT EXISTS barbers (
   id CHAR(36) PRIMARY KEY,
   shop_id CHAR(36) NOT NULL,
   name VARCHAR(120) NOT NULL,
@@ -86,7 +104,7 @@ CREATE TABLE barbers (
   INDEX idx_barber_shop (shop_id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE barber_services (
+CREATE TABLE IF NOT EXISTS barber_services (
   barber_id CHAR(36) NOT NULL,
   service_id CHAR(36) NOT NULL,
   PRIMARY KEY (barber_id, service_id),
@@ -94,7 +112,7 @@ CREATE TABLE barber_services (
   FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
-CREATE TABLE customers (
+CREATE TABLE IF NOT EXISTS customers (
   id CHAR(36) PRIMARY KEY,
   customer_id CHAR(36) NOT NULL,
   shop_id CHAR(36) NOT NULL,
@@ -104,7 +122,7 @@ CREATE TABLE customers (
   FOREIGN KEY (shop_id) REFERENCES shops(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
-CREATE TABLE queue_entries (
+CREATE TABLE IF NOT EXISTS queue_entries (
   id CHAR(36) PRIMARY KEY,
   shop_id CHAR(36) NOT NULL,
   barber_id CHAR(36) NOT NULL,
@@ -124,7 +142,7 @@ CREATE TABLE queue_entries (
   INDEX idx_queue_customer (customer_id, status)
 ) ENGINE=InnoDB;
 
-CREATE TABLE payments (
+CREATE TABLE IF NOT EXISTS payments (
   id CHAR(36) PRIMARY KEY,
   shop_id CHAR(36) NOT NULL,
   queue_id CHAR(36),
@@ -139,7 +157,7 @@ CREATE TABLE payments (
   INDEX idx_payment_shop (shop_id, status)
 ) ENGINE=InnoDB;
 
-CREATE TABLE refunds (
+CREATE TABLE IF NOT EXISTS refunds (
   id CHAR(36) PRIMARY KEY,
   payment_id CHAR(36) NOT NULL,
   customer_id CHAR(36) NOT NULL,
@@ -151,7 +169,7 @@ CREATE TABLE refunds (
   FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
-CREATE TABLE reviews (
+CREATE TABLE IF NOT EXISTS reviews (
   id CHAR(36) PRIMARY KEY,
   shop_id CHAR(36) NOT NULL,
   customer_id CHAR(36) NOT NULL,
@@ -166,7 +184,7 @@ CREATE TABLE reviews (
   INDEX idx_review_shop (shop_id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE complaints (
+CREATE TABLE IF NOT EXISTS complaints (
   id CHAR(36) PRIMARY KEY,
   customer_id CHAR(36) NOT NULL,
   shop_id CHAR(36) NOT NULL,
@@ -184,7 +202,7 @@ CREATE TABLE complaints (
   INDEX idx_complaint_routing (target_type, shop_id, status)
 ) ENGINE=InnoDB;
 
-CREATE TABLE notifications (
+CREATE TABLE IF NOT EXISTS notifications (
   id CHAR(36) PRIMARY KEY,
   user_id CHAR(36),
   shop_id CHAR(36),
@@ -200,7 +218,7 @@ CREATE TABLE notifications (
   INDEX idx_notification_shop (shop_id, created_at)
 ) ENGINE=InnoDB;
 
-CREATE TABLE audit_logs (
+CREATE TABLE IF NOT EXISTS audit_logs (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   actor_id CHAR(36),
   action VARCHAR(120) NOT NULL,
@@ -213,7 +231,7 @@ CREATE TABLE audit_logs (
 ) ENGINE=InnoDB;
 
 -- Customer payment submissions. Only an owner ACCEPT moves a row into the queue.
-CREATE TABLE payment_bookings (
+CREATE TABLE IF NOT EXISTS payment_bookings (
   id CHAR(36) PRIMARY KEY,
   shop_id CHAR(36) NOT NULL,
   barber_id CHAR(36) NOT NULL,
@@ -268,12 +286,6 @@ CREATE TABLE IF NOT EXISTS service_unavailability (
   FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
--- Server-side queue state and persistent reviews (see migrations/add_queue_reviews.sql)
-ALTER TABLE payment_bookings
-  ADD COLUMN queue_status VARCHAR(20) NULL,
-  ADD COLUMN skipped_at DATETIME NULL,
-  ADD COLUMN skip_count INT NOT NULL DEFAULT 0,
-  ADD COLUMN completed_at DATETIME NULL;
 CREATE TABLE IF NOT EXISTS booking_reviews (
   id CHAR(36) PRIMARY KEY,
   shop_id CHAR(36) NOT NULL,
@@ -303,3 +315,108 @@ CREATE TABLE IF NOT EXISTS shop_co_owners (
   INDEX idx_co_owner_shop (shop_id),
   INDEX idx_co_owner_email (email)
 ) ENGINE=InnoDB;
+
+
+-- =====================================================================
+-- PART 2 : UPGRADE OLDER DATABASES (no-op on a fresh install)
+-- Each step checks information_schema first, so it is safe to re-run.
+-- =====================================================================
+
+-- ---- users (add_password_auth) --------------------------------------
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users' AND COLUMN_NAME='password_hash');
+SET @ddl := IF(@c=0, 'ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ---- shops (add_upi_qr_payment) -------------------------------------
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='shops' AND COLUMN_NAME='upi_qr_url');
+SET @ddl := IF(@c=0, 'ALTER TABLE shops ADD COLUMN upi_qr_url TEXT NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ---- payment_bookings (add_service_unavailability, add_upi_qr_payment, add_queue_reviews)
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='booking_date');
+SET @ddl := IF(@c=0, 'ALTER TABLE payment_bookings ADD COLUMN booking_date DATE NULL AFTER customer_id', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='payment_method');
+SET @ddl := IF(@c=0, 'ALTER TABLE payment_bookings ADD COLUMN payment_method VARCHAR(30) NOT NULL DEFAULT ''upi_qr''', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='payer_name');
+SET @ddl := IF(@c=0, 'ALTER TABLE payment_bookings ADD COLUMN payer_name VARCHAR(120) NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='payment_submitted_at');
+SET @ddl := IF(@c=0, 'ALTER TABLE payment_bookings ADD COLUMN payment_submitted_at DATETIME NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='payment_reference');
+SET @ddl := IF(@c=0, 'ALTER TABLE payment_bookings ADD COLUMN payment_reference VARCHAR(120) NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='declined_until');
+SET @ddl := IF(@c=0, 'ALTER TABLE payment_bookings ADD COLUMN declined_until DATETIME NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='queue_status');
+SET @ddl := IF(@c=0, 'ALTER TABLE payment_bookings ADD COLUMN queue_status VARCHAR(20) NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='skipped_at');
+SET @ddl := IF(@c=0, 'ALTER TABLE payment_bookings ADD COLUMN skipped_at DATETIME NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='skip_count');
+SET @ddl := IF(@c=0, 'ALTER TABLE payment_bookings ADD COLUMN skip_count INT NOT NULL DEFAULT 0', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='completed_at');
+SET @ddl := IF(@c=0, 'ALTER TABLE payment_bookings ADD COLUMN completed_at DATETIME NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- status enum: add 'payment_submitted' etc. on databases created before the UPI flow
+SET @type := (SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='status');
+SET @ddl := IF(@type IS NOT NULL AND LOCATE('''payment_submitted''', @type)=0,
+  'ALTER TABLE payment_bookings MODIFY COLUMN status ENUM(''payment_submitted'',''accepted'',''rejected'',''created'',''paid'',''failed'',''cancelled'') NOT NULL DEFAULT ''payment_submitted''',
+  'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ---- complaints (add_complaint_details_and_resolution, add_complaint_target_routing)
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='complaints' AND COLUMN_NAME='issue_type');
+SET @ddl := IF(@c=0, 'ALTER TABLE complaints ADD COLUMN issue_type VARCHAR(80) NOT NULL DEFAULT ''Other''', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='complaints' AND COLUMN_NAME='subject');
+SET @ddl := IF(@c=0, 'ALTER TABLE complaints ADD COLUMN subject VARCHAR(190) NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='complaints' AND COLUMN_NAME='description');
+SET @ddl := IF(@c=0, 'ALTER TABLE complaints ADD COLUMN description TEXT NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='complaints' AND COLUMN_NAME='resolved_at');
+SET @ddl := IF(@c=0, 'ALTER TABLE complaints ADD COLUMN resolved_at DATETIME NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- Existing complaints default to owner review: their target cannot be safely
+-- inferred from free-text issue descriptions.
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='complaints' AND COLUMN_NAME='target_type');
+SET @ddl := IF(@c=0, 'ALTER TABLE complaints ADD COLUMN target_type ENUM(''staff'',''owner'') NOT NULL DEFAULT ''owner''', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='complaints' AND COLUMN_NAME='target_barber_id');
+SET @ddl := IF(@c=0, 'ALTER TABLE complaints ADD COLUMN target_barber_id CHAR(36) NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='complaints' AND INDEX_NAME='idx_complaint_routing');
+SET @ddl := IF(@c=0, 'CREATE INDEX idx_complaint_routing ON complaints (target_type, shop_id, status)', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ---- data backfills (all guarded, safe to re-run) --------------------
+UPDATE complaints SET description = issue WHERE description IS NULL;
+
+UPDATE payment_bookings SET queue_status = 'Waiting'
+WHERE status = 'accepted' AND queue_status IS NULL;
+
+UPDATE payment_bookings
+SET payment_submitted_at = COALESCE(payment_submitted_at, paid_at, created_at)
+WHERE status = 'payment_submitted' AND payment_submitted_at IS NULL;
