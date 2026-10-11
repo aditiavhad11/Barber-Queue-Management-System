@@ -263,7 +263,7 @@ export const scheduleError = (schedule) => {
         const a = shifts[i];
         const b = shifts[j];
         if (a.open < b.close && b.open < a.close) {
-          return `${d}: Shift ${i + 1} (${a.open}-${a.close}) and Shift ${j + 1} (${b.open}-${b.close}) overlap.`;
+          return `${d}: This time slot overlaps with another shift. Please select a different time (Shift ${i + 1} and Shift ${j + 1}).`;
         }
       }
     }

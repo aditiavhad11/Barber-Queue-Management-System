@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../../hooks/useAuth";
 import { notifyError, notifySuccess } from "../../utils/toast";
 
@@ -26,6 +27,19 @@ export default function Auth({ mode }) {
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [devOtp, setDevOtp] = useState("");
+  const [showPwd, setShowPwd] = useState({});
+  const togglePwd = (key) => setShowPwd((p) => ({ ...p, [key]: !p[key] }));
+  const PwdToggle = ({ name }) => (
+    <button
+      type="button"
+      onClick={() => togglePwd(name)}
+      className="absolute right-3 top-1/2 -translate-y-1/2 text-coffee/50 hover:text-coffee transition-colors"
+      tabIndex={-1}
+      aria-label={showPwd[name] ? "Hide password" : "Show password"}
+    >
+      {showPwd[name] ? <EyeOff size={16} /> : <Eye size={16} />}
+    </button>
+  );
 
   useEffect(() => {
     if (isAdmin && mode === "signin") setLoginMethod("otp");
@@ -147,17 +161,20 @@ export default function Auth({ mode }) {
         className="input"
       />
 
-      <input
-        type="password"
-        required
-        value={password}
-        onChange={(e) => {
-          setPassword(e.target.value);
-          setErr("");
-        }}
-        placeholder="Password"
-        className="input"
-      />
+      <div className="relative">
+        <input
+          type={showPwd["signin"] ? "text" : "password"}
+          required
+          value={password}
+          onChange={(e) => {
+            setPassword(e.target.value);
+            setErr("");
+          }}
+          placeholder="Password"
+          className="input pr-10"
+        />
+        <PwdToggle name="signin" />
+      </div>
 
       {err && <p className="text-sm text-rose">{err}</p>}
 
@@ -239,18 +256,21 @@ export default function Auth({ mode }) {
         className="input"
       />
 
-      <input
-        type="password"
-        required
-        minLength={8}
-        value={password}
-        onChange={(e) => {
-          setPassword(e.target.value);
-          setErr("");
-        }}
-        placeholder="Create password (min 8 characters)"
-        className="input"
-      />
+      <div className="relative">
+        <input
+          type={showPwd["create"] ? "text" : "password"}
+          required
+          minLength={8}
+          value={password}
+          onChange={(e) => {
+            setPassword(e.target.value);
+            setErr("");
+          }}
+          placeholder="Create password (min 8 characters)"
+          className="input pr-10"
+        />
+        <PwdToggle name="create" />
+      </div>
 
       {err && <p className="text-sm text-rose">{err}</p>}
 
@@ -292,19 +312,25 @@ export default function Auth({ mode }) {
               }}
               className="space-y-4 mt-6"
             >
-              <input
-                type="password"
-                required
-                minLength={8}
-                placeholder="New password"
-                className="input"
-              />
-              <input
-                type="password"
-                required
-                placeholder="Confirm password"
-                className="input"
-              />
+              <div className="relative">
+                <input
+                  type={showPwd["new"] ? "text" : "password"}
+                  required
+                  minLength={8}
+                  placeholder="New password"
+                  className="input pr-10"
+                />
+                <PwdToggle name="new" />
+              </div>
+              <div className="relative">
+                <input
+                  type={showPwd["confirm"] ? "text" : "password"}
+                  required
+                  placeholder="Confirm password"
+                  className="input pr-10"
+                />
+                <PwdToggle name="confirm" />
+              </div>
               <button className="btn w-full">Reset password</button>
             </form>
           ) : mode === "create" && step === "form" ? (

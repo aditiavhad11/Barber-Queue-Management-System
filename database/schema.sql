@@ -95,8 +95,12 @@ CREATE TABLE IF NOT EXISTS barbers (
   shop_id CHAR(36) NOT NULL,
   name VARCHAR(120) NOT NULL,
   gender VARCHAR(40),
+  age TINYINT UNSIGNED NULL,
+  phone VARCHAR(20) NULL,
+  email VARCHAR(190) NULL,
   experience_years INT UNSIGNED DEFAULT 0,
   specialization VARCHAR(180),
+  working_days_json JSON NULL,
   rating DECIMAL(3,2) NOT NULL DEFAULT 0,
   status ENUM('Available','On Break','Unavailable') NOT NULL DEFAULT 'Available',
   photo_url TEXT,
@@ -420,3 +424,20 @@ WHERE status = 'accepted' AND queue_status IS NULL;
 UPDATE payment_bookings
 SET payment_submitted_at = COALESCE(payment_submitted_at, paid_at, created_at)
 WHERE status = 'payment_submitted' AND payment_submitted_at IS NULL;
+
+-- ---- barbers (new fields: age, phone, email, working_days_json) ------
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='barbers' AND COLUMN_NAME='age');
+SET @ddl := IF(@c=0, 'ALTER TABLE barbers ADD COLUMN age TINYINT UNSIGNED NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='barbers' AND COLUMN_NAME='phone');
+SET @ddl := IF(@c=0, 'ALTER TABLE barbers ADD COLUMN phone VARCHAR(20) NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='barbers' AND COLUMN_NAME='email');
+SET @ddl := IF(@c=0, 'ALTER TABLE barbers ADD COLUMN email VARCHAR(190) NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='barbers' AND COLUMN_NAME='working_days_json');
+SET @ddl := IF(@c=0, 'ALTER TABLE barbers ADD COLUMN working_days_json JSON NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
