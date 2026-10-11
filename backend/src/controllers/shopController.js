@@ -2,6 +2,10 @@ import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import { pool } from "../config/db.js";
 
+/* ------------------------------------------------------------------ */
+/* Small helpers                                                       */
+/* ------------------------------------------------------------------ */
+
 const parseJson = (value, fallback = {}) => {
   if (!value) return fallback;
   if (typeof value === "object") return value;
@@ -12,20 +16,38 @@ const parseJson = (value, fallback = {}) => {
   }
 };
 
+const IST_DATE_FORMAT = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Kolkata",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
 const localDateKey = (date = new Date()) => {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
+  const parts = IST_DATE_FORMAT.formatToParts(date);
   const pick = (type) => parts.find((p) => p.type === type)?.value;
   return `${pick("year")}-${pick("month")}-${pick("day")}`;
 };
 
+/** True only for a real calendar date in YYYY-MM-DD form. */
+const isValidDateKey = (date) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const parsed = new Date(`${date}T00:00:00Z`);
+  return (
+    !Number.isNaN(parsed.getTime()) &&
+    parsed.toISOString().slice(0, 10) === date
+  );
+};
+
+const notOwned = (res) =>
+  res
+    .status(404)
+    .json({ message: "Shop not found or not owned by this account." });
+
 function validateAnnualSchedules(availability = {}) {
   const schedules =
-    availability?.annualSchedules && typeof availability.annualSchedules === "object"
+    availability?.annualSchedules &&
+    typeof availability.annualSchedules === "object"
       ? availability.annualSchedules
       : {};
   const today = localDateKey();
@@ -40,7 +62,11 @@ function validateAnnualSchedules(availability = {}) {
     if (item.type !== "closed") {
       const open = String(item.open || "").slice(0, 5);
       const close = String(item.close || "").slice(0, 5);
-      if (!/^\d{2}:\d{2}$/.test(open) || !/^\d{2}:\d{2}$/.test(close) || close <= open) {
+      if (
+        !/^\d{2}:\d{2}$/.test(open) ||
+        !/^\d{2}:\d{2}$/.test(close) ||
+        close <= open
+      ) {
         return "Scheduled hours must have a valid opening time before closing time.";
       }
     }
@@ -48,12 +74,69 @@ function validateAnnualSchedules(availability = {}) {
   return "";
 }
 
+/** Group rows into Map<key, row[]> keeping the original row order. */
+const groupBy = (rows, key) => {
+  const map = new Map();
+  for (const row of rows) {
+    const k = row[key];
+    const bucket = map.get(k);
+    if (bucket) bucket.push(row);
+    else map.set(k, [row]);
+  }
+  return map;
+};
+
+const mapCoOwner = (c) => ({
+  id: c.id,
+  shopId: c.shop_id,
+  name: c.name,
+  email: c.email,
+  phone: c.phone || "",
+  title: c.title || "Co-Owner",
+  permissions: parseJson(c.permissions_json, {}),
+  status: c.status || "active",
+  createdAt: c.created_at,
+  updatedAt: c.updated_at,
+});
+
+const CO_OWNER_COLUMNS =
+  "id, shop_id, name, email, phone, title, permissions_json, status, created_at, updated_at";
+const BARBER_COLUMNS =
+  "id,shop_id,name,gender,experience_years,specialization,rating,status,photo_url";
+
+/* ------------------------------------------------------------------ */
+/* Access helpers                                                      */
+/* ------------------------------------------------------------------ */
+
+/** Owner-only access (owner_id match). */
+async function ownsShop(req, shopId) {
+  const [rows] = await pool.query(
+    "SELECT id FROM shops WHERE id=? AND owner_id=? LIMIT 1",
+    [shopId, req.user.sub],
+  );
+  return rows.length > 0;
+}
+
+/** Owner OR the shop / co-owner login that belongs to this shop. */
+async function canManageShop(req, shopId) {
+  const isShopOrCoOwner =
+    req.user.role === "shop" || req.user.role === "co_owner";
+  const shopIdFromUser = req.user.shopId || req.user.sub;
+  const [rows] = await pool.query(
+    "SELECT id FROM shops WHERE id=? AND (owner_id=? OR id=?) LIMIT 1",
+    [shopId, req.user.sub, isShopOrCoOwner ? shopIdFromUser : "__no_shop__"],
+  );
+  return rows.length > 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Bulk insert                                                         */
+/* ------------------------------------------------------------------ */
+
 /**
- * Bulk insert helper.
- * - `sql` must end with `VALUES ?` (mysql2 expands the nested array into
- *   multiple row tuples). This only works with `.query()`, NOT `.execute()`.
- * - Rows are sent in chunks so one huge payload can never exceed
- *   `max_allowed_packet`. For normal shops it is a single round-trip.
+ * - `sql` must end with `VALUES ?` (mysql2 expands the nested array).
+ *   Works with `.query()` only, NOT `.execute()`.
+ * - Rows are chunked so one payload never exceeds `max_allowed_packet`.
  */
 const BULK_CHUNK_SIZE = 500;
 async function bulkInsert(conn, sql, rows) {
@@ -71,12 +154,12 @@ const BARBER_INSERT =
   "INSERT INTO barbers(id,shop_id,name,gender,experience_years,specialization,status,photo_url) VALUES ?";
 const BARBER_SERVICE_INSERT =
   "INSERT INTO barber_services(barber_id,service_id) VALUES ?";
+const CO_OWNER_INSERT =
+  "INSERT INTO shop_co_owners(id,shop_id,name,email,phone,title,password_hash,permissions_json,status) VALUES ?";
 
 /**
- * Single-statement replacement for the old
- * `for (sid of services) INSERT IGNORE ... SELECT ?,id FROM services WHERE id=? AND shop_id=?`
- * Still validates that every service belongs to the given shop and still
- * silently skips unknown / foreign ids and duplicates (INSERT IGNORE).
+ * Links a barber to services in one statement. Only services that belong to
+ * `shopId` are linked; unknown / foreign ids and duplicates are skipped.
  */
 async function linkBarberServices(conn, barberId, shopId, serviceIds) {
   if (!Array.isArray(serviceIds) || !serviceIds.length) return;
@@ -86,63 +169,71 @@ async function linkBarberServices(conn, barberId, shopId, serviceIds) {
   );
 }
 
-async function hydrateShop(row) {
-  const [photos] = await pool.query(
-    "SELECT id,url,is_primary FROM shop_photos WHERE shop_id=? ORDER BY is_primary DESC, created_at ASC",
-    [row.id],
-  );
+/* ------------------------------------------------------------------ */
+/* Hydration (batched: ~6 queries total regardless of shop count)      */
+/* ------------------------------------------------------------------ */
 
-  const [services] = await pool.query(
-    "SELECT id,name,price,duration_minutes,enabled FROM services WHERE shop_id=? ORDER BY id ASC",
-    [row.id],
-  );
+async function hydrateShops(shopRows) {
+  if (!shopRows.length) return [];
+  const shopIds = shopRows.map((r) => r.id);
 
-  const [barbers] = await pool.query(
-    "SELECT id,name,gender,experience_years,specialization,rating,status,photo_url FROM barbers WHERE shop_id=? ORDER BY id ASC",
-    [row.id],
-  );
-let coOwners = [];
+  const [[photoRows], [serviceRows], [barberRows], coOwnerRows, reviewRows] =
+    await Promise.all([
+      pool.query(
+        "SELECT id,shop_id,url,is_primary FROM shop_photos WHERE shop_id IN (?) ORDER BY is_primary DESC, created_at ASC",
+        [shopIds],
+      ),
+      pool.query(
+        "SELECT id,shop_id,name,price,duration_minutes,enabled FROM services WHERE shop_id IN (?) ORDER BY id ASC",
+        [shopIds],
+      ),
+      pool.query(
+        `SELECT ${BARBER_COLUMNS} FROM barbers WHERE shop_id IN (?) ORDER BY id ASC`,
+        [shopIds],
+      ),
+      pool
+        .query(
+          `SELECT ${CO_OWNER_COLUMNS} FROM shop_co_owners WHERE shop_id IN (?) ORDER BY created_at ASC`,
+          [shopIds],
+        )
+        .then(([rows]) => rows)
+        .catch((error) => {
+          if (error.code === "ER_NO_SUCH_TABLE") return [];
+          throw error;
+        }),
+      pool
+        .query(
+          "SELECT r.id,r.shop_id,r.queue_id,r.customer_id,r.rating,r.text,r.created_at,u.name AS customer_name FROM booking_reviews r JOIN users u ON u.id=r.customer_id WHERE r.shop_id IN (?) ORDER BY r.created_at DESC",
+          [shopIds],
+        )
+        .then(([rows]) => rows)
+        // table is created on server start; ignore if it is not there yet
+        .catch(() => []),
+    ]);
 
-try {
-  const [coOwnerRows] = await pool.query(
-    `SELECT id, shop_id, name, email, phone, title,
-            permissions_json, status, created_at, updated_at
-     FROM shop_co_owners
-     WHERE shop_id = ?
-     ORDER BY created_at ASC`,
-    [row.id]
-  );
-
-  coOwners = coOwnerRows.map((c) => ({
-  const [coOwnerRows] = await pool.query(
-    "SELECT id, shop_id, name, email, phone, title, permissions_json, status, created_at, updated_at FROM shop_co_owners WHERE shop_id=? ORDER BY created_at ASC",
-    [row.id],
-  );
-  const coOwners = coOwnerRows.map((c) => ({
-    id: c.id,
-    shopId: c.shop_id,
-    name: c.name,
-    email: c.email,
-    phone: c.phone || "",
-    title: c.title || "Co-Owner",
-    permissions: parseJson(c.permissions_json, {}),
-    status: c.status || "active",
-    createdAt: c.created_at,
-    updatedAt: c.updated_at,
-  }));
-} catch (error) {
-  if (error.code !== "ER_NO_SUCH_TABLE") {
-    throw error;
-  }
-}
-
-  let reviewsList = [];
-  try {
-    const [revs] = await pool.query(
-      "SELECT r.id,r.queue_id,r.customer_id,r.rating,r.text,r.created_at,u.name AS customer_name FROM booking_reviews r JOIN users u ON u.id=r.customer_id WHERE r.shop_id=? ORDER BY r.created_at DESC",
-      [row.id],
+  // barber -> services mapping
+  const servicesByBarber = new Map();
+  if (barberRows.length) {
+    const [mapRows] = await pool.query(
+      "SELECT barber_id,service_id FROM barber_services WHERE barber_id IN (?)",
+      [barberRows.map((b) => b.id)],
     );
-    reviewsList = revs.map((r) => ({
+    for (const m of mapRows) {
+      const list = servicesByBarber.get(m.barber_id);
+      if (list) list.push(m.service_id);
+      else servicesByBarber.set(m.barber_id, [m.service_id]);
+    }
+  }
+
+  const photosByShop = groupBy(photoRows, "shop_id");
+  const servicesByShop = groupBy(serviceRows, "shop_id");
+  const barbersByShop = groupBy(barberRows, "shop_id");
+  const coOwnersByShop = groupBy(coOwnerRows, "shop_id");
+  const reviewsByShop = groupBy(reviewRows, "shop_id");
+
+  return shopRows.map((row) => ({
+    ...row,
+    reviewsList: (reviewsByShop.get(row.id) || []).map((r) => ({
       id: r.id,
       queueId: r.queue_id,
       customerId: r.customer_id,
@@ -155,35 +246,8 @@ try {
         year: "numeric",
       }),
       shopId: row.id,
-    }));
-  } catch {
-    /* table is created on server start; ignore if it is not there yet */
-  }
-  const barberIds = barbers.map((b) => b.id);
-
-  let mappings = [];
-
-  if (barberIds.length) {
-    const [mapRows] = await pool.query(
-      `SELECT barber_id,service_id FROM barber_services WHERE barber_id IN (${barberIds.map(() => "?").join(",")})`,
-      barberIds,
-    );
-    mappings = mapRows;
-  }
-
-  // Group once (O(n)) instead of filtering the full list per barber (O(n*m)).
-  const servicesByBarber = {};
-  for (const id of barberIds) servicesByBarber[id] = [];
-  for (const m of mappings) {
-    if (servicesByBarber[m.barber_id]) {
-      servicesByBarber[m.barber_id].push(m.service_id);
-    }
-  }
-
-  return {
-    ...row,
-    reviewsList,
-    coOwners,
+    })),
+    coOwners: (coOwnersByShop.get(row.id) || []).map(mapCoOwner),
     ownerId: row.owner_id,
     loginEmail: row.login_email,
     rejection: row.rejection_reason || "",
@@ -202,12 +266,12 @@ try {
     availability: parseJson(row.availability_json),
     policy: parseJson(row.policies_json),
     upiQrUrl: row.upi_qr_url || "",
-    photos: photos.map((p) => ({
+    photos: (photosByShop.get(row.id) || []).map((p) => ({
       id: p.id,
       url: p.url,
       primary: Boolean(p.is_primary),
     })),
-    services: services.map((x) => ({
+    services: (servicesByShop.get(row.id) || []).map((x) => ({
       id: x.id,
       shopId: row.id,
       name: x.name,
@@ -215,7 +279,7 @@ try {
       duration: Number(x.duration_minutes),
       enabled: Boolean(x.enabled),
     })),
-    barbers: barbers.map((b) => ({
+    barbers: (barbersByShop.get(row.id) || []).map((b) => ({
       id: b.id,
       shopId: row.id,
       name: b.name,
@@ -225,16 +289,22 @@ try {
       rating: Number(b.rating),
       status: b.status,
       photo: b.photo_url || "",
-      services: servicesByBarber[b.id] || [],
+      services: servicesByBarber.get(b.id) || [],
     })),
-  };
+  }));
 }
+
+const hydrateShop = async (row) => (await hydrateShops([row]))[0];
+
+/* ------------------------------------------------------------------ */
+/* Shops                                                               */
+/* ------------------------------------------------------------------ */
 
 export async function listApproved(_req, res) {
   const [rows] = await pool.query(
     "SELECT * FROM shops WHERE status='approved' AND active=1 ORDER BY created_at DESC",
   );
-  res.json(await Promise.all(rows.map(hydrateShop)));
+  res.json(await hydrateShops(rows));
 }
 
 export async function listMine(req, res) {
@@ -242,7 +312,14 @@ export async function listMine(req, res) {
     "SELECT * FROM shops WHERE owner_id=? ORDER BY created_at DESC",
     [req.user.sub],
   );
-  res.json(await Promise.all(rows.map(hydrateShop)));
+  res.json(await hydrateShops(rows));
+}
+
+export async function listAdmin(_req, res) {
+  const [rows] = await pool.query(
+    "SELECT * FROM shops ORDER BY created_at DESC",
+  );
+  res.json(await hydrateShops(rows));
 }
 
 export async function createShop(req, res) {
@@ -256,10 +333,36 @@ export async function createShop(req, res) {
 
   const id = crypto.randomUUID();
 
-  // Legacy schema keeps these columns NOT NULL; credentials are generated internally and are not shown to owners.
+  // Legacy schema keeps these columns NOT NULL; credentials are generated
+  // internally and are not shown to owners.
   const internalLoginEmail = `shop-${id}@internal.invalid`;
 
-  const hash = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 12);
+  // Co-owners to create (hash passwords up-front, in parallel, so the
+  // transaction does not stay open while bcrypt runs).
+  const coOwners = Array.isArray(b.coOwners)
+    ? b.coOwners
+    : b.coOwner
+      ? [b.coOwner]
+      : [];
+
+  const [hash, coOwnerRows] = await Promise.all([
+    bcrypt.hash(crypto.randomBytes(32).toString("hex"), 12),
+    Promise.all(
+      coOwners
+        .filter((co) => co?.name?.trim() && co?.email?.trim())
+        .map(async (co) => [
+          crypto.randomUUID(),
+          id,
+          String(co.name).trim(),
+          String(co.email).trim().toLowerCase(),
+          String(co.phone || "").trim(),
+          String(co.title || "Co-Owner").trim(),
+          await bcrypt.hash(String(co.password || "barber1234"), 10),
+          JSON.stringify(co.permissions || {}),
+          co.status || "active",
+        ]),
+    ),
+  ]);
 
   const connection = await pool.getConnection();
 
@@ -287,7 +390,7 @@ export async function createShop(req, res) {
       ],
     );
 
-    // ---- photos (1 bulk insert) ----
+    // ---- photos ----
     const photoRows = (b.photos || [])
       .filter((photo) => photo?.url)
       .map((photo) => [
@@ -298,7 +401,7 @@ export async function createShop(req, res) {
       ]);
     await bulkInsert(connection, SHOP_PHOTO_INSERT, photoRows);
 
-    // ---- services (1 bulk insert) ----
+    // ---- services ----
     const services = (b.services || []).filter(
       (x) => x?.name && Number(x.price) > 0 && Number(x.duration) > 0,
     );
@@ -320,8 +423,7 @@ export async function createShop(req, res) {
     });
     await bulkInsert(connection, SERVICE_INSERT, serviceRows);
 
-    // ---- barbers + barber_services (2 bulk inserts total) ----
-
+    // ---- barbers + barber_services ----
     const barberCount = Math.max(1, Number(b.barberCount || b.barbers || 1));
 
     const barbers = Array.isArray(b.barbers)
@@ -333,8 +435,8 @@ export async function createShop(req, res) {
 
     const barberRows = [];
     const barberServiceRows = [];
-    for (let i = 0; i < barbers.length; i += 1) {
-      const barber = barbers[i] || {};
+    barbers.forEach((rawBarber, i) => {
+      const barber = rawBarber || {};
       const bid = crypto.randomUUID();
       barberRows.push([
         bid,
@@ -350,49 +452,23 @@ export async function createShop(req, res) {
       const requestedServices = Array.isArray(barber.services)
         ? barber.services
         : [];
-      const barberServiceIds = requestedServices
+      const mapped = requestedServices
         .map((sid) => serviceIdMap.get(String(sid)))
         .filter(Boolean);
-      const idsToUse = barberServiceIds.length ? barberServiceIds : serviceIds;
+      const idsToUse = mapped.length ? mapped : serviceIds;
       for (const sid of idsToUse) barberServiceRows.push([bid, sid]);
-    }
-    // barbers first, then mappings (FK order preserved)
+    });
 
+    // barbers first, then mappings (FK order)
     await bulkInsert(connection, BARBER_INSERT, barberRows);
     await bulkInsert(connection, BARBER_SERVICE_INSERT, barberServiceRows);
 
-    const coOwners = Array.isArray(b.coOwners)
-      ? b.coOwners
-      : b.coOwner
-        ? [b.coOwner]
-        : [];
-    for (const co of coOwners) {
-      if (!co?.name?.trim() || !co?.email?.trim()) continue;
-      const coId = crypto.randomUUID();
-      const coHash = await bcrypt.hash(
-        String(co.password || "barber1234"),
-        10,
-      );
-      await connection.query(
-        "INSERT INTO shop_co_owners(id,shop_id,name,email,phone,title,password_hash,permissions_json,status) VALUES (?,?,?,?,?,?,?,?,?)",
-        [
-          coId,
-          id,
-          String(co.name).trim(),
-          String(co.email).trim().toLowerCase(),
-          String(co.phone || "").trim(),
-          String(co.title || "Co-Owner").trim(),
-          coHash,
-          JSON.stringify(co.permissions || {}),
-          co.status || "active",
-        ],
-      );
-    }
+    // ---- co-owners ----
+    await bulkInsert(connection, CO_OWNER_INSERT, coOwnerRows);
 
     await connection.commit();
 
     const [rows] = await pool.query("SELECT * FROM shops WHERE id=?", [id]);
-
     res.status(201).json(await hydrateShop(rows[0]));
   } catch (error) {
     await connection.rollback();
@@ -411,31 +487,19 @@ export async function updateShop(req, res) {
   const b = req.body || {};
   const shopId = req.params.id;
 
-  const [owned] = await pool.query(
-    "SELECT id FROM shops WHERE id=? AND owner_id=? LIMIT 1",
-    [shopId, req.user.sub],
-  );
-
-  if (!owned.length)
-    return res
-      .status(404)
-      .json({ message: "Shop not found or not owned by this account." });
+  if (!(await ownsShop(req, shopId))) return notOwned(res);
 
   const fields = [];
   const values = [];
-
   const add = (column, value) => {
     fields.push(`${column}=?`);
     values.push(value);
   };
 
   if (b.name !== undefined) add("name", String(b.name).trim());
-
   if (b.description !== undefined)
     add("description", String(b.description || ""));
-
   if (b.contact !== undefined) add("contact", String(b.contact).trim());
-
   if (b.address !== undefined) add("address", String(b.address).trim());
 
   if (b.location !== undefined) {
@@ -458,14 +522,13 @@ export async function updateShop(req, res) {
     add("policies_json", JSON.stringify(b.policy || {}));
 
   const connection = await pool.getConnection();
-
   try {
     await connection.beginTransaction();
+
     if (fields.length) {
-      values.push(shopId);
       await connection.query(
         `UPDATE shops SET ${fields.join(", ")} WHERE id=? AND owner_id=?`,
-        [...values, req.user.sub],
+        [...values, shopId, req.user.sub],
       );
     }
 
@@ -531,33 +594,18 @@ export async function deleteShop(req, res) {
     "DELETE FROM shops WHERE id=? AND owner_id=?",
     [req.params.id, req.user.sub],
   );
-  if (!result.affectedRows)
-    return res
-      .status(404)
-      .json({ message: "Shop not found or not owned by this account." });
+  if (!result.affectedRows) return notOwned(res);
   res.json({ ok: true });
 }
 
-export async function listAdmin(_req, res) {
-  const [rows] = await pool.query(
-    "SELECT * FROM shops ORDER BY created_at DESC",
-  );
-  res.json(await Promise.all(rows.map(hydrateShop)));
-}
+/* ------------------------------------------------------------------ */
+/* Services                                                            */
+/* ------------------------------------------------------------------ */
 
 export async function createService(req, res) {
   const { id: shopId } = req.params;
-  const isShopOrCoOwner =
-    req.user.role === "shop" || req.user.role === "co_owner";
-  const shopIdFromUser = req.user.shopId || req.user.sub;
-  const [owned] = await pool.query(
-    "SELECT id FROM shops WHERE id=? AND (owner_id=? OR id=?) LIMIT 1",
-    [shopId, req.user.sub, isShopOrCoOwner ? shopIdFromUser : "__no_shop__"],
-  );
-  if (!owned.length)
-    return res
-      .status(404)
-      .json({ message: "Shop not found or not owned by this account." });
+  if (!(await canManageShop(req, shopId))) return notOwned(res);
+
   const name = String(req.body?.name || "").trim();
   const price = Number(req.body?.price);
   const duration = Number(req.body?.duration);
@@ -572,25 +620,27 @@ export async function createService(req, res) {
       message: "Enter a service name, positive price and positive duration.",
     });
   }
+
   const [existing] = await pool.query(
     "SELECT id,name,price,duration_minutes,enabled FROM services WHERE shop_id=? AND LOWER(name)=LOWER(?) LIMIT 1",
     [shopId, name],
   );
   if (existing.length) {
+    const e = existing[0];
     return res.json({
       existing: true,
       service: {
-        id: existing[0].id,
+        id: e.id,
         shopId,
-        name: existing[0].name,
-        price: Number(existing[0].price),
-        duration: Number(existing[0].duration_minutes),
-        enabled: Boolean(existing[0].enabled),
+        name: e.name,
+        price: Number(e.price),
+        duration: Number(e.duration_minutes),
+        enabled: Boolean(e.enabled),
       },
     });
   }
-  const id = crypto.randomUUID();
 
+  const id = crypto.randomUUID();
   await pool.query(
     "INSERT INTO services(id,shop_id,name,price,duration_minutes,enabled) VALUES (?,?,?,?,?,1)",
     [id, shopId, name, price, duration],
@@ -602,7 +652,11 @@ export async function createService(req, res) {
   });
 }
 
-// Date-specific service restrictions are scoped to a service in the requested shop.
+/* ------------------------------------------------------------------ */
+/* Service unavailability                                              */
+/* ------------------------------------------------------------------ */
+
+// Date-specific restrictions are scoped to a service in the requested shop.
 async function ownedService(req) {
   const { id: shopId, serviceId } = req.params;
   const isShopLogin = ["shop", "co_owner"].includes(req.user.role);
@@ -615,28 +669,29 @@ async function ownedService(req) {
   return rows.length > 0;
 }
 
+const serviceNotFound = (res) =>
+  res.status(404).json({ message: "Service not found for this shop." });
+
 export async function listServiceUnavailability(req, res) {
-  if (!(await ownedService(req)))
-    return res.status(404).json({ message: "Service not found for this shop." });
+  if (!(await ownedService(req))) return serviceNotFound(res);
   const [rows] = await pool.query(
     "SELECT id, DATE_FORMAT(unavailable_date, '%Y-%m-%d') AS date, reason FROM service_unavailability WHERE shop_id=? AND service_id=? ORDER BY unavailable_date ASC",
     [req.params.id, req.params.serviceId],
   );
-  res.json(rows.map((row) => ({
-    id: row.id,
-    date: row.date,
-    reason: row.reason || "",
-  })));
+  res.json(
+    rows.map((row) => ({
+      id: row.id,
+      date: row.date,
+      reason: row.reason || "",
+    })),
+  );
 }
 
 export async function listPublicServiceUnavailability(req, res) {
   const date = String(req.query?.date || "");
-  const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(date)
-    ? new Date(`${date}T00:00:00Z`)
-    : null;
-  if (!parsedDate || Number.isNaN(parsedDate.getTime()) ||
-      parsedDate.toISOString().slice(0, 10) !== date)
+  if (!isValidDateKey(date))
     return res.status(400).json({ message: "Enter a valid booking date." });
+
   let rows;
   try {
     [rows] = await pool.query(
@@ -649,72 +704,83 @@ export async function listPublicServiceUnavailability(req, res) {
     );
   } catch (error) {
     if (error.code === "ER_NO_SUCH_TABLE")
-      return res.status(503).json({ message: "Service availability could not be checked right now." });
+      return res.status(503).json({
+        message: "Service availability could not be checked right now.",
+      });
     throw error;
   }
-  res.json(rows.map((row) => ({
-    serviceId: row.service_id,
-    serviceName: row.name,
-    date,
-    reason: row.reason || "",
-  })));
+
+  res.json(
+    rows.map((row) => ({
+      serviceId: row.service_id,
+      serviceName: row.name,
+      date,
+      reason: row.reason || "",
+    })),
+  );
 }
 
 export async function saveServiceUnavailability(req, res) {
-  if (!(await ownedService(req)))
-    return res.status(404).json({ message: "Service not found for this shop." });
+  if (!(await ownedService(req))) return serviceNotFound(res);
+
   const date = String(req.body?.date || "");
-  const reason = String(req.body?.reason || "").trim().slice(0, 255) || null;
-  const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(date)
-    ? new Date(`${date}T00:00:00Z`)
-    : null;
-  if (!parsedDate || Number.isNaN(parsedDate.getTime()) ||
-      parsedDate.toISOString().slice(0, 10) !== date)
+  const reason =
+    String(req.body?.reason || "")
+      .trim()
+      .slice(0, 255) || null;
+  if (!isValidDateKey(date))
     return res.status(400).json({ message: "Enter a valid unavailable date." });
+
   try {
-    const id = crypto.randomUUID();
     await pool.query(
       `INSERT INTO service_unavailability (id, shop_id, service_id, unavailable_date, reason)
        VALUES (?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE reason=VALUES(reason)`,
-      [id, req.params.id, req.params.serviceId, date, reason],
+      [crypto.randomUUID(), req.params.id, req.params.serviceId, date, reason],
     );
     const [rows] = await pool.query(
       "SELECT id, DATE_FORMAT(unavailable_date, '%Y-%m-%d') AS date, reason FROM service_unavailability WHERE shop_id=? AND service_id=? AND unavailable_date=? LIMIT 1",
       [req.params.id, req.params.serviceId, date],
     );
-    res.json({ restriction: { id: rows[0].id, date: rows[0].date, reason: rows[0].reason || "" }, message: "Availability restriction saved." });
+    res.json({
+      restriction: {
+        id: rows[0].id,
+        date: rows[0].date,
+        reason: rows[0].reason || "",
+      },
+      message: "Availability restriction saved.",
+    });
   } catch (error) {
     if (error.code === "ER_NO_SUCH_TABLE")
-      return res.status(503).json({ message: "Availability migration must be applied first." });
+      return res
+        .status(503)
+        .json({ message: "Availability migration must be applied first." });
     throw error;
   }
 }
 
 export async function removeServiceUnavailability(req, res) {
-  if (!(await ownedService(req)))
-    return res.status(404).json({ message: "Service not found for this shop." });
+  if (!(await ownedService(req))) return serviceNotFound(res);
   const [result] = await pool.query(
     "DELETE FROM service_unavailability WHERE id=? AND shop_id=? AND service_id=?",
     [req.params.restrictionId, req.params.id, req.params.serviceId],
   );
   if (!result.affectedRows)
-    return res.status(404).json({ message: "Availability restriction not found." });
+    return res
+      .status(404)
+      .json({ message: "Availability restriction not found." });
   res.json({ message: "Availability restriction removed." });
 }
 
+/* ------------------------------------------------------------------ */
+/* Barbers                                                             */
+/* ------------------------------------------------------------------ */
+
+const BARBER_STATUSES = ["Available", "On Break", "Unavailable"];
+
 export async function createBarber(req, res) {
   const { id: shopId } = req.params;
-
-  const [owned] = await pool.query(
-    "SELECT id FROM shops WHERE id=? AND (owner_id=? OR id=?) LIMIT 1",
-    [shopId, req.user.sub, isShopOrCoOwner ? shopIdFromUser : "__no_shop__"],
-  );
-
-  if (!owned.length)
-    return res
-      .status(404)
-      .json({ message: "Shop not found or not owned by this account." });
+  if (!(await canManageShop(req, shopId))) return notOwned(res);
 
   const b = req.body || {};
   if (!String(b.name || "").trim())
@@ -733,20 +799,16 @@ export async function createBarber(req, res) {
         String(b.gender || "Prefer not to say"),
         Math.max(0, Number(b.experience) || 0),
         String(b.specialization || ""),
-        ["Available", "On Break", "Unavailable"].includes(b.status)
-          ? b.status
-          : "Available",
+        BARBER_STATUSES.includes(b.status) ? b.status : "Available",
         b.photo ? String(b.photo) : null,
       ],
     );
-    // one statement instead of one INSERT per service
     await linkBarberServices(
       connection,
       id,
       shopId,
       Array.isArray(b.services) ? b.services : [],
     );
-
     await connection.commit();
   } catch (error) {
     await connection.rollback();
@@ -754,8 +816,9 @@ export async function createBarber(req, res) {
   } finally {
     connection.release();
   }
+
   const [rows] = await pool.query(
-    "SELECT id,shop_id,name,gender,experience_years,specialization,rating,status,photo_url FROM barbers WHERE id=?",
+    `SELECT ${BARBER_COLUMNS} FROM barbers WHERE id=?`,
     [id],
   );
   res.status(201).json({ barber: rows[0] });
@@ -763,17 +826,8 @@ export async function createBarber(req, res) {
 
 export async function updateBarber(req, res) {
   const { id: shopId, barberId } = req.params;
-  const isShopOrCoOwner =
-    req.user.role === "shop" || req.user.role === "co_owner";
-  const shopIdFromUser = req.user.shopId || req.user.sub;
-  const [owned] = await pool.query(
-    "SELECT id FROM shops WHERE id=? AND (owner_id=? OR id=?) LIMIT 1",
-    [shopId, req.user.sub, isShopOrCoOwner ? shopIdFromUser : "__no_shop__"],
-  );
-  if (!owned.length)
-    return res
-      .status(404)
-      .json({ message: "Shop not found or not owned by this account." });
+  if (!(await canManageShop(req, shopId))) return notOwned(res);
+
   const fields = [];
   const values = [];
   const add = (k, v) => {
@@ -787,20 +841,18 @@ export async function updateBarber(req, res) {
     add("experience_years", Math.max(0, Number(b.experience) || 0));
   if (b.specialization !== undefined)
     add("specialization", String(b.specialization || ""));
-  if (
-    b.status !== undefined &&
-    ["Available", "On Break", "Unavailable"].includes(b.status)
-  )
+  if (b.status !== undefined && BARBER_STATUSES.includes(b.status))
     add("status", b.status);
   if (b.photo !== undefined) add("photo_url", b.photo ? String(b.photo) : null);
+
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
+
     if (fields.length) {
-      values.push(barberId, shopId);
       const [result] = await connection.query(
         `UPDATE barbers SET ${fields.join(", ")} WHERE id=? AND shop_id=?`,
-        values,
+        [...values, barberId, shopId],
       );
       if (!result.affectedRows) {
         await connection.rollback();
@@ -809,13 +861,14 @@ export async function updateBarber(req, res) {
           .json({ message: "Barber not found in this shop." });
       }
     }
+
     if (Array.isArray(b.services)) {
       await connection.query("DELETE FROM barber_services WHERE barber_id=?", [
         barberId,
       ]);
-      // one statement instead of one INSERT per service
       await linkBarberServices(connection, barberId, shopId, b.services);
     }
+
     await connection.commit();
   } catch (error) {
     await connection.rollback();
@@ -823,63 +876,48 @@ export async function updateBarber(req, res) {
   } finally {
     connection.release();
   }
-  const [rows] = await pool.query(
-    "SELECT id,shop_id,name,gender,experience_years,specialization,rating,status,photo_url FROM barbers WHERE id=?",
-    [barberId],
-  );
-  const [maps] = await pool.query(
-    "SELECT service_id FROM barber_services WHERE barber_id=?",
-    [barberId],
-  );
+
+  const [[rows], [maps]] = await Promise.all([
+    pool.query(`SELECT ${BARBER_COLUMNS} FROM barbers WHERE id=?`, [barberId]),
+    pool.query("SELECT service_id FROM barber_services WHERE barber_id=?", [
+      barberId,
+    ]),
+  ]);
   res.json({ barber: { ...rows[0], services: maps.map((x) => x.service_id) } });
+}
+
+/* ------------------------------------------------------------------ */
+/* Co-owners                                                           */
+/* ------------------------------------------------------------------ */
+
+async function fetchCoOwner(id) {
+  const [rows] = await pool.query(
+    `SELECT ${CO_OWNER_COLUMNS} FROM shop_co_owners WHERE id=? LIMIT 1`,
+    [id],
+  );
+  return rows[0];
 }
 
 export async function listCoOwners(req, res) {
   const { id: shopId } = req.params;
-  const [owned] = await pool.query(
-    "SELECT id FROM shops WHERE id=? AND owner_id=? LIMIT 1",
-    [shopId, req.user.sub],
-  );
-  if (!owned.length) {
-    return res
-      .status(404)
-      .json({ message: "Shop not found or not owned by this account." });
-  }
+  if (!(await ownsShop(req, shopId))) return notOwned(res);
+
   const [rows] = await pool.query(
-    "SELECT id, shop_id, name, email, phone, title, permissions_json, status, created_at, updated_at FROM shop_co_owners WHERE shop_id=? ORDER BY created_at ASC",
+    `SELECT ${CO_OWNER_COLUMNS} FROM shop_co_owners WHERE shop_id=? ORDER BY created_at ASC`,
     [shopId],
   );
-  res.json(
-    rows.map((c) => ({
-      id: c.id,
-      shopId: c.shop_id,
-      name: c.name,
-      email: c.email,
-      phone: c.phone || "",
-      title: c.title || "Co-Owner",
-      permissions: parseJson(c.permissions_json, {}),
-      status: c.status || "active",
-      createdAt: c.created_at,
-      updatedAt: c.updated_at,
-    })),
-  );
+  res.json(rows.map(mapCoOwner));
 }
 
 export async function createCoOwner(req, res) {
   const { id: shopId } = req.params;
-  const [owned] = await pool.query(
-    "SELECT id FROM shops WHERE id=? AND owner_id=? LIMIT 1",
-    [shopId, req.user.sub],
-  );
-  if (!owned.length) {
-    return res
-      .status(404)
-      .json({ message: "Shop not found or not owned by this account." });
-  }
+  if (!(await ownsShop(req, shopId))) return notOwned(res);
 
   const b = req.body || {};
   const name = String(b.name || "").trim();
-  const email = String(b.email || "").trim().toLowerCase();
+  const email = String(b.email || "")
+    .trim()
+    .toLowerCase();
   const phone = String(b.phone || "").trim();
   const title = String(b.title || "Co-Owner").trim();
   const password = String(b.password || "");
@@ -925,121 +963,54 @@ export async function createCoOwner(req, res) {
     ],
   );
 
-  const [rows] = await pool.query(
-    "SELECT id, shop_id, name, email, phone, title, permissions_json, status, created_at, updated_at FROM shop_co_owners WHERE id=? LIMIT 1",
-    [id],
-  );
-  res.status(201).json({
-    coOwner: {
-      id: rows[0].id,
-      shopId: rows[0].shop_id,
-      name: rows[0].name,
-      email: rows[0].email,
-      phone: rows[0].phone || "",
-      title: rows[0].title || "Co-Owner",
-      permissions: parseJson(rows[0].permissions_json, {}),
-      status: rows[0].status,
-      createdAt: rows[0].created_at,
-      updatedAt: rows[0].updated_at,
-    },
-  });
+  res.status(201).json({ coOwner: mapCoOwner(await fetchCoOwner(id)) });
 }
 
 export async function updateCoOwner(req, res) {
   const { id: shopId, coOwnerId } = req.params;
-  const [owned] = await pool.query(
-    "SELECT id FROM shops WHERE id=? AND owner_id=? LIMIT 1",
-    [shopId, req.user.sub],
-  );
-  if (!owned.length) {
-    return res
-      .status(404)
-      .json({ message: "Shop not found or not owned by this account." });
-  }
+  if (!(await ownsShop(req, shopId))) return notOwned(res);
 
   const b = req.body || {};
   const fields = [];
   const values = [];
-  if (b.name !== undefined) {
-    fields.push("name=?");
-    values.push(String(b.name).trim());
-  }
-  if (b.email !== undefined) {
-    fields.push("email=?");
-    values.push(String(b.email).trim().toLowerCase());
-  }
-  if (b.phone !== undefined) {
-    fields.push("phone=?");
-    values.push(String(b.phone).trim());
-  }
-  if (b.title !== undefined) {
-    fields.push("title=?");
-    values.push(String(b.title).trim());
-  }
-  if (b.status !== undefined && ["active", "inactive"].includes(b.status)) {
-    fields.push("status=?");
-    values.push(b.status);
-  }
-  if (b.permissions !== undefined) {
-    fields.push("permissions_json=?");
-    values.push(JSON.stringify(b.permissions));
-  }
-  if (b.password) {
-    const hash = await bcrypt.hash(String(b.password), 10);
-    fields.push("password_hash=?");
-    values.push(hash);
-  }
+  const add = (column, value) => {
+    fields.push(`${column}=?`);
+    values.push(value);
+  };
+
+  if (b.name !== undefined) add("name", String(b.name).trim());
+  if (b.email !== undefined) add("email", String(b.email).trim().toLowerCase());
+  if (b.phone !== undefined) add("phone", String(b.phone).trim());
+  if (b.title !== undefined) add("title", String(b.title).trim());
+  if (b.status !== undefined && ["active", "inactive"].includes(b.status))
+    add("status", b.status);
+  if (b.permissions !== undefined)
+    add("permissions_json", JSON.stringify(b.permissions));
+  if (b.password)
+    add("password_hash", await bcrypt.hash(String(b.password), 10));
 
   if (fields.length) {
-    values.push(coOwnerId, shopId);
     await pool.query(
       `UPDATE shop_co_owners SET ${fields.join(", ")} WHERE id=? AND shop_id=?`,
-      values,
+      [...values, coOwnerId, shopId],
     );
   }
 
-  const [rows] = await pool.query(
-    "SELECT id, shop_id, name, email, phone, title, permissions_json, status, created_at, updated_at FROM shop_co_owners WHERE id=? LIMIT 1",
-    [coOwnerId],
-  );
-  if (!rows.length) {
-    return res.status(404).json({ message: "Co-owner not found." });
-  }
+  const row = await fetchCoOwner(coOwnerId);
+  if (!row) return res.status(404).json({ message: "Co-owner not found." });
 
-  res.json({
-    coOwner: {
-      id: rows[0].id,
-      shopId: rows[0].shop_id,
-      name: rows[0].name,
-      email: rows[0].email,
-      phone: rows[0].phone || "",
-      title: rows[0].title || "Co-Owner",
-      permissions: parseJson(rows[0].permissions_json, {}),
-      status: rows[0].status,
-      createdAt: rows[0].created_at,
-      updatedAt: rows[0].updated_at,
-    },
-  });
+  res.json({ coOwner: mapCoOwner(row) });
 }
 
 export async function deleteCoOwner(req, res) {
   const { id: shopId, coOwnerId } = req.params;
-  const [owned] = await pool.query(
-    "SELECT id FROM shops WHERE id=? AND owner_id=? LIMIT 1",
-    [shopId, req.user.sub],
-  );
-  if (!owned.length) {
-    return res
-      .status(404)
-      .json({ message: "Shop not found or not owned by this account." });
-  }
+  if (!(await ownsShop(req, shopId))) return notOwned(res);
 
   const [result] = await pool.query(
     "DELETE FROM shop_co_owners WHERE id=? AND shop_id=?",
     [coOwnerId, shopId],
   );
-  if (!result.affectedRows) {
+  if (!result.affectedRows)
     return res.status(404).json({ message: "Co-owner not found." });
-  }
   res.json({ ok: true });
 }
