@@ -16,6 +16,7 @@ import CustomerReviews from "./pages/customer/Reviews";
 import {
   Bookings,
   Payments as CustomerPayments,
+  Refunds as CustomerRefunds,
   Notifications,
   Profile,
   Settings,
@@ -44,6 +45,7 @@ import Barbers from "./pages/owner/Barbers";
 import Services from "./pages/owner/Services";
 import AllShopServices from "./pages/owner/AllShopServices";
 import OwnerComplaints from "./pages/owner/Complaints";
+import ClosureResolutions from "./pages/owner/ClosureResolutions";
 import { Payments, Customers, Earnings, Reviews } from "./pages/owner/Business";
 import {
   Notifications as ONotifications,
@@ -144,6 +146,7 @@ export default function App() {
             />
             <Route path="bookings" element={<Bookings />} />
             <Route path="payments" element={<CustomerPayments />} />
+            <Route path="refunds" element={<CustomerRefunds />} />
             <Route path="reviews" element={<CustomerReviews />} />
             <Route path="complaints" element={<Complaints />} />
             <Route path="notifications" element={<Notifications />} />
@@ -179,6 +182,7 @@ export default function App() {
             <Route path="earnings" element={<Earnings />} />
             <Route path="reviews" element={<Reviews />} />
             <Route path="complaints" element={<OwnerComplaints />} />
+            <Route path="closure-resolutions" element={<ClosureResolutions />} />
             <Route path="notifications" element={<ONotifications />} />
             <Route path="profile" element={<OProfile />} />
             <Route path="settings" element={<OSettings />} />

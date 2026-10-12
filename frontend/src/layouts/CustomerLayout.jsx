@@ -11,6 +11,7 @@ import {
   Settings,
   LogOut,
   MessageSquareWarning,
+  RotateCcw,
 } from "lucide-react";
 import { useAuth } from "../hooks/useAuth";
 const main = [
@@ -19,6 +20,7 @@ const main = [
   ["/app/queue", "My Queue", Ticket],
   ["/app/bookings", "Bookings", CalendarClock],
   ["/app/payments", "Payments", CreditCard],
+  ["/app/refunds", "Refunds", RotateCcw],
   ["/app/reviews", "Reviews", Star],
   ["/app/complaints", "Complaints", MessageSquareWarning],
   ["/app/notifications", "Notifications", Bell],

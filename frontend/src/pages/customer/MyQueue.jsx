@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import LiveWait from "../../components/common/LiveWait";
 import AwaitingBookings from "../../components/common/AwaitingBookings";
 import { Navigation, Plus, Star, MessageSquareWarning } from "lucide-react";
@@ -19,6 +19,7 @@ export default function MyQueue() {
   const [paying, setPaying] = useState(false);
   const [addServiceError, setAddServiceError] = useState("");
   const [swapTargetPosition, setSwapTargetPosition] = useState("");
+  const handledClosureAction = useRef("");
 
   const activeBookings = useMemo(
     () => customerQueues.filter((q) => activeStatuses.includes(q.entry.status)),
@@ -36,6 +37,24 @@ export default function MyQueue() {
     if (selectedId && !customerQueues.some((q) => q.entry.id === selectedId))
       setSelectedId(activeBookings[0]?.entry.id || null);
   }, [activeBookings, customerQueues, selectedId]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const bookingId = params.get("closure");
+    const choice = params.get("choice");
+    const target = customerQueues.find((q) => q.entry.id === bookingId);
+    const action =
+      choice === "wait"
+        ? "closure_wait"
+        : choice === "refund"
+          ? "closure_refund"
+          : "";
+    if (!target || !action || target.entry.status !== "Emergency Closed") return;
+    const key = `${bookingId}:${action}`;
+    if (handledClosureAction.current === key) return;
+    handledClosureAction.current = key;
+    queueAction(target.shop.id, target.barberId, target.entry.id, action);
+  }, [customerQueues, queueAction]);
 
   if (!customerQueues.length)
     return (
@@ -265,6 +284,39 @@ export default function MyQueue() {
               ? `Position ${position} · ${Math.max(position - 1, 0)} customer${Math.max(position - 1, 0) === 1 ? "" : "s"} ahead`
               : "Queue position is being updated."}
           </p>
+        )}
+
+        {entry.status === "Emergency Closed" && (
+          <div className="border border-rose/30 bg-rose/10 p-5 mt-8">
+            <p className="font-semibold text-rose">Shop closed unexpectedly</p>
+            <p className="text-sm mt-1">
+              Your ticket is paused. Choose whether to wait for reopening or
+              request a refund.
+            </p>
+            {!entry.closureChoice && (
+              <div className="flex flex-wrap gap-3 mt-4">
+                <button
+                  className="btn"
+                  onClick={() =>
+                    queueAction(shop.id, selected.barberId, entry.id, "closure_wait")
+                  }
+                >
+                  Wait for reopening
+                </button>
+                <button
+                  className="btn-ghost text-rose"
+                  onClick={() =>
+                    queueAction(shop.id, selected.barberId, entry.id, "closure_refund")
+                  }
+                >
+                  Request refund
+                </button>
+              </div>
+            )}
+            {entry.closureChoice === "wait" && (
+              <p className="text-sm mt-4">Your ticket will resume when the shop reopens.</p>
+            )}
+          </div>
         )}
 
         <dl className="grid md:grid-cols-2 gap-7 mt-8 text-sm">

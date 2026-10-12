@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import { pool } from "../config/db.js";
+import { enqueueEmergencyClosureNotifications } from "../jobs/emergencyClosureQueue.js";
 
 /* ------------------------------------------------------------------ */
 /* Small helpers                                                       */
@@ -558,6 +559,43 @@ export async function updateShop(req, res) {
 
   if (!(await ownsShop(req, shopId))) return notOwned(res);
 
+  const [[currentShop]] = await pool.query(
+    "SELECT availability_json FROM shops WHERE id=? AND owner_id=? LIMIT 1",
+    [shopId, req.user.sub],
+  );
+  const currentAvailability = parseJson(
+    currentShop?.availability_json,
+    {},
+  );
+  let nextAvailability =
+    b.availability !== undefined ? b.availability || {} : currentAvailability;
+  const previousClosure = currentAvailability.temporaryClosure;
+  const nextClosure = nextAvailability.temporaryClosure;
+  const closureStarted =
+    nextClosure?.active &&
+    nextClosure.startDate <= new Date().toISOString().slice(0, 10) &&
+    !(previousClosure?.active && previousClosure.startDate === nextClosure.startDate);
+  const closureEnded = previousClosure?.active && nextClosure?.active === false;
+  if (b.isOpen !== undefined) {
+    nextAvailability = {
+      ...nextAvailability,
+      isOpen: Boolean(b.isOpen),
+    };
+  }
+  if (closureStarted) {
+    nextAvailability = {
+      ...nextAvailability,
+      isOpen: false,
+      emergencyClosed: true,
+    };
+  } else if (closureEnded) {
+    nextAvailability = {
+      ...nextAvailability,
+      isOpen: true,
+      emergencyClosed: false,
+    };
+  }
+
   const fields = [];
   const values = [];
   const add = (column, value) => {
@@ -586,23 +624,13 @@ export async function updateShop(req, res) {
     if (annualError) return res.status(400).json({ message: annualError });
     const shiftError = validateShifts(b.availability || {});
     if (shiftError) return res.status(400).json({ message: shiftError });
-    add("availability_json", JSON.stringify(b.availability || {}));
+    add("availability_json", JSON.stringify(nextAvailability));
   }
 
   if (b.isOpen !== undefined && b.availability === undefined) {
-    const [currentRows] = await pool.query(
-      "SELECT availability_json FROM shops WHERE id=? LIMIT 1",
-      [shopId],
-    );
-    const currentAvailability =
-      currentRows[0]?.availability_json || {};
-    const availability =
-      typeof currentAvailability === "string"
-        ? JSON.parse(currentAvailability || "{}")
-        : currentAvailability;
     add(
       "availability_json",
-      JSON.stringify({ ...availability, isOpen: Boolean(b.isOpen) }),
+      JSON.stringify({ ...currentAvailability, isOpen: Boolean(b.isOpen) }),
     );
   }
 
@@ -635,6 +663,16 @@ export async function updateShop(req, res) {
       await bulkInsert(connection, SHOP_PHOTO_INSERT, photoRows);
     }
 
+    if (closureStarted) {
+      await connection.query(
+        `UPDATE payment_bookings
+         SET queue_status='Emergency Closed', closure_choice=NULL
+         WHERE shop_id=? AND status='accepted'
+           AND queue_status IN ('Waiting','Your Turn','In Service')`,
+        [shopId],
+      );
+    }
+
     await connection.commit();
   } catch (error) {
     await connection.rollback();
@@ -646,6 +684,15 @@ export async function updateShop(req, res) {
   const [rows] = await pool.query("SELECT * FROM shops WHERE id=? LIMIT 1", [
     shopId,
   ]);
+  if (closureStarted) {
+    await enqueueEmergencyClosureNotifications(shopId, nextClosure).catch(
+      (error) =>
+        console.error(
+          "Could not enqueue emergency closure notifications:",
+          error.message,
+        ),
+    );
+  }
   res.json(await hydrateShop(rows[0]));
 }
 

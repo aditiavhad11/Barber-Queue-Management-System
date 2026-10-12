@@ -30,6 +30,7 @@ import {
   User,
   Layers3,
   MessageSquareWarning,
+  RotateCcw,
 } from "lucide-react";
 import { useAuth } from "../hooks/useAuth";
 import { useOwner } from "../hooks/useOwnerStore";
@@ -71,6 +72,7 @@ const groups = [
       ["/owner/earnings", "Earnings", Wallet],
       ["/owner/reviews", "Reviews", Star],
       ["/owner/complaints", "Complaints", MessageSquareWarning],
+      ["/owner/closure-resolutions", "Closure resolutions", RotateCcw],
     ],
   ],
   [null, [["/owner/notifications", "Notifications", Bell]]],

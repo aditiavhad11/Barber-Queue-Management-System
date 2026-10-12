@@ -82,6 +82,7 @@ export async function hydrateBookings(rows) {
       queuePosition: Number(row.queue_position || 0) || null,
       failureReason: row.failure_reason || "",
       refundStatus: row.refund_status || null,
+      closureChoice: row.closure_choice || null,
       declineReason: row.decline_reason || "",
       createdAt: iso(row.created_at),
       paidAt: iso(row.paid_at),

@@ -75,3 +75,25 @@ export async function sendBookingNotificationEmail(to, data) {
   });
   return true;
 }
+
+export async function sendEmergencyClosureEmail(to, data) {
+  if (!transport) return false;
+  const subject = `${data.shopName || "Barber Queue"} is temporarily closed`;
+  await transport.sendMail({
+    from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+    to,
+    subject,
+    text: `Dear ${data.customerName || "Customer"},
+
+${data.shopName || "The shop"} has closed due to an emergency. Your token #${data.token || "-"} has been paused.
+
+Choose one option:
+Wait for reopening: ${data.waitUrl}
+Request refund: ${data.refundUrl}
+
+Regards,
+Barber Queue Team`,
+    html: `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#33281f"><h2>Shop temporarily closed</h2><p>Dear ${data.customerName || "Customer"},</p><p>${data.shopName || "The shop"} has closed due to an emergency. Your token <b>#${data.token || "-"}</b> has been paused.</p><p><a href="${data.waitUrl}" style="display:inline-block;background:#314d3b;color:#fff;padding:10px 14px;text-decoration:none;margin-right:8px">Wait until reopening</a><a href="${data.refundUrl}" style="display:inline-block;background:#b99b61;color:#1c1713;padding:10px 14px;text-decoration:none">Request refund</a></p><p>Regards,<br>Barber Queue Team</p></div>`,
+  });
+  return true;
+}
