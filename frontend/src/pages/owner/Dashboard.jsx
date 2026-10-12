@@ -138,7 +138,7 @@ export default function Dashboard() {
     0,
   );
   const stats = [
-    ["Today's customers", today.length + queued],
+    ["Today's customers", today.length],
     ["Today's earnings", "₹" + today.reduce((t, p) => t + p.amount, 0)],
     [
       "Active queues",
