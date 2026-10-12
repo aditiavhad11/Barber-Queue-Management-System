@@ -6,6 +6,8 @@ import {
 } from "../controllers/paymentController.js";
 import {
   listMine,
+  listRefunds,
+  listClosureResolutions,
   getMine,
   listPending,
   acceptBooking,
@@ -23,6 +25,13 @@ router.post("/payment-quote", auth, requireRole("customer"), paymentQuote);
 router.post("/payment-submit", auth, requireRole("customer"), submitPayment);
 
 router.get("/mine", auth, requireRole("customer"), listMine);
+router.get("/refunds", auth, requireRole("customer"), listRefunds);
+router.get(
+  "/closure-resolutions",
+  auth,
+  requireRole("owner", "shop", "co_owner"),
+  listClosureResolutions,
+);
 router.get(
   "/pending",
   auth,

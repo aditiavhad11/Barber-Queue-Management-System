@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useOwner } from "../../hooks/useOwnerStore";
 import { Trash2 } from "lucide-react";
 import { Badge, Empty } from "../../components/common/ui";
 import { relativeTime } from "../../utils/relativeTime";
+import { api } from "../../services/api";
 export function Bookings() {
   const { customerPayments, customerQueue } = useOwner();
   const grouped = new Map();
@@ -262,6 +263,78 @@ const Row = ({ k, v }) => (
     <b className="text-right">{v}</b>
   </div>
 );
+export function Refunds() {
+  const [refunds, setRefunds] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    api
+      .get("/bookings/refunds", { toastOnError: false })
+      .then((response) => {
+        if (active) setRefunds(response.data || []);
+      })
+      .catch((error) => {
+        console.error("Could not load refunds:", error.message);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return (
+    <div className="fade">
+      <h1 className="text-5xl mb-2">Refunds</h1>
+      <p className="text-coffee/70 mb-6">
+        Emergency-closure refund requests remain visible here until completed.
+      </p>
+      {loading ? (
+        <p className="text-sm text-coffee/60">Loading...</p>
+      ) : !refunds.length ? (
+        <Empty
+          title="No refunds"
+          text="Refund requests and completed refunds will appear here."
+        />
+      ) : (
+        <div className="border-t border-khaki">
+          {refunds.map((refund) => (
+            <div
+              key={refund.id}
+              className="flex flex-wrap justify-between gap-3 py-4 border-b border-khaki"
+            >
+              <div>
+                <b>{refund.shopName || "Shop"}</b>
+                <p className="text-sm text-coffee/70">
+                  {refund.services?.map((service) => service.name).join(" + ") ||
+                    "Booking"}{" "}
+                  · Token {refund.token || "-"}
+                </p>
+                <p className="text-xs text-coffee/55">{refund.id}</p>
+              </div>
+              <div className="text-right">
+                <b>₹{refund.amount}</b>
+                <p
+                  className={
+                    refund.refundStatus === "completed"
+                      ? "text-olive text-sm"
+                      : "text-gold text-sm"
+                  }
+                >
+                  {refund.refundStatus === "completed"
+                    ? "Refunded"
+                    : "Refund requested"}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 export const Notifications = () => {
   const { notifications, removeNotification } = useOwner();
   return (

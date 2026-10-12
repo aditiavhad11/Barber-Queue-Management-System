@@ -257,6 +257,7 @@ CREATE TABLE IF NOT EXISTS payment_bookings (
   queue_id VARCHAR(60) NULL,
   refund_id VARCHAR(64) NULL,
   refund_status VARCHAR(30) NULL,
+  closure_choice VARCHAR(20) NULL,
   decline_reason VARCHAR(255) NULL,
   declined_until DATETIME NULL,
   paid_at DATETIME NULL,

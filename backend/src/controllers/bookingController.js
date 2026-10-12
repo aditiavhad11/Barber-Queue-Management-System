@@ -1,4 +1,5 @@
 import { pool } from "../config/db.js";
+import crypto from "node:crypto";
 import {
   addNotification,
   findBookings,
@@ -17,6 +18,28 @@ export async function listMine(req, res) {
     "b.customer_id=? AND b.status IN ('payment_submitted','accepted','rejected')",
     [req.user.sub],
     "ORDER BY b.created_at DESC LIMIT 30",
+  );
+  res.json(await hydrateBookings(rows));
+}
+
+export async function listRefunds(req, res) {
+  const rows = await findBookings(
+    "b.customer_id=? AND b.refund_status IS NOT NULL",
+    [req.user.sub],
+    "ORDER BY b.created_at DESC LIMIT 100",
+  );
+  res.json(await hydrateBookings(rows));
+}
+
+export async function listClosureResolutions(req, res) {
+  const { sql, params } = scope(req);
+  const rows = await findBookings(
+    `b.status='accepted' AND ${sql} AND (
+      (b.queue_status='Emergency Closed' AND b.closure_choice='wait')
+      OR b.refund_status='requested'
+    )`,
+    params,
+    "ORDER BY b.created_at ASC LIMIT 500",
   );
   res.json(await hydrateBookings(rows));
 }
@@ -346,7 +369,12 @@ export async function listQueue(req, res) {
 
 export async function setQueueStatus(req, res) {
   const action = String(req.body?.action || "");
-  if (action && !["swap", "requeue", "remove"].includes(action))
+  if (
+    action &&
+    !["swap", "requeue", "remove", "closure_wait", "closure_refund"].includes(
+      action,
+    )
+  )
     return res.status(400).json({ message: "Invalid queue action." });
 
   const status = String(req.body?.status || "");
@@ -373,6 +401,79 @@ export async function setQueueStatus(req, res) {
   const current = booking.queueStatus || "Waiting";
 
   if (action) {
+    if (["closure_wait", "closure_refund"].includes(action)) {
+      if (current !== "Emergency Closed")
+        return res.status(409).json({
+          message: "This booking is not waiting for an emergency closure decision.",
+        });
+      const choice = action === "closure_wait" ? "wait" : "refund";
+      await pool.query(
+        `UPDATE payment_bookings
+         SET closure_choice=?, queue_status=?, refund_status=?
+         WHERE id=? AND status='accepted' AND queue_status='Emergency Closed'`,
+        [
+          choice,
+          action === "closure_wait" ? "Emergency Closed" : "Cancelled",
+          action === "closure_refund" ? "requested" : booking.refundStatus,
+          booking.id,
+        ],
+      );
+      const [fresh] = await hydrateBookings(
+        await findBookings("b.id=?", [booking.id], "LIMIT 1"),
+      );
+      return res.json({ booking: fresh, action });
+    }
+    if (action === "rejoin" || action === "refund_complete") {
+      if (isCustomer)
+        return res.status(403).json({ message: "Owner action required." });
+      if (
+        action === "rejoin" &&
+        (current !== "Emergency Closed" || booking.closureChoice !== "wait")
+      )
+        return res.status(409).json({
+          message: "This customer is not waiting for the shop to reopen.",
+        });
+      if (action === "refund_complete" && booking.refundStatus !== "requested")
+        return res.status(409).json({
+          message: "This booking does not have a pending refund request.",
+        });
+
+      if (action === "rejoin") {
+        await pool.query(
+          `UPDATE payment_bookings
+           SET queue_status='Waiting', closure_choice='wait',
+               refund_status=NULL, skipped_at=NOW()
+           WHERE id=? AND status='accepted' AND queue_status='Emergency Closed'`,
+          [booking.id],
+        );
+        await addNotification({
+          shopId: booking.shopId,
+          userId: booking.customerId,
+          tone: "success",
+          text: "The shop has rejoined you to the queue after reopening.",
+          refId: booking.id,
+        });
+      } else {
+        await pool.query(
+          `UPDATE payment_bookings
+           SET queue_status='Cancelled', refund_status='completed',
+               refund_id=?
+           WHERE id=? AND status='accepted' AND refund_status='requested'`,
+          [`REF-${crypto.randomUUID()}`, booking.id],
+        );
+        await addNotification({
+          shopId: booking.shopId,
+          userId: booking.customerId,
+          tone: "success",
+          text: "Your emergency-closure refund has been completed.",
+          refId: booking.id,
+        });
+      }
+      const [fresh] = await hydrateBookings(
+        await findBookings("b.id=?", [booking.id], "LIMIT 1"),
+      );
+      return res.json({ booking: fresh, action });
+    }
     if (
       action === "requeue" &&
       current !== "Your Turn"

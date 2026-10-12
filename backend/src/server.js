@@ -11,6 +11,7 @@ import notificationRoutes from "./routes/notificationRoutes.js";
 import bookingRoutes from "./routes/bookingRoutes.js";
 import complaintRoutes from "./routes/complaintRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
+import "./jobs/emergencyClosureQueue.js";
 dotenv.config();
 
 if (!process.env.JWT_SECRET) {

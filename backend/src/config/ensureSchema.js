@@ -59,6 +59,11 @@ export async function ensureSchema() {
   await ensureColumn("payment_bookings", "completed_at", "DATETIME NULL");
   await ensureColumn("payment_bookings", "booking_date", "DATE NULL");
   await ensureColumn(
+    "payment_bookings",
+    "closure_choice",
+    "VARCHAR(20) NULL",
+  );
+  await ensureColumn(
     "complaints",
     "issue_type",
     "VARCHAR(80) NOT NULL DEFAULT 'Other'",

@@ -420,6 +420,7 @@ export function OwnerProvider({ children }) {
         "availability",
         "policy",
         "photos",
+        "isOpen",
       ].forEach((k) => {
         if (changed[k] !== undefined) body[k] = changed[k];
       });
@@ -954,6 +955,35 @@ export function OwnerProvider({ children }) {
           ),
         );
     }
+    if (action === "closure_wait" || action === "closure_refund") {
+      setState((p) => ({
+        ...p,
+        shops: p.shops.map((shop) =>
+          shop.id === shopId
+            ? {
+                ...shop,
+                queues: {
+                  ...shop.queues,
+                  [barberId]: (shop.queues?.[barberId] || []).map((entry) =>
+                    entry.id === entryId
+                      ? {
+                          ...entry,
+                          status:
+                            action === "closure_refund"
+                              ? "Cancelled"
+                              : "Emergency Closed",
+                          closureChoice:
+                            action === "closure_refund" ? "refund" : "wait",
+                        }
+                      : entry,
+                  ),
+                },
+              }
+            : shop,
+        ),
+      }));
+      return;
+    }
     setState((p) => {
       const target = p.shops.find((s) => s.id === shopId);
       let queue = [...(target?.queues?.[barberId] || [])];
@@ -1047,6 +1077,7 @@ export function OwnerProvider({ children }) {
             ? {
                 ...e,
                 status,
+                ...(b.closureChoice ? { closureChoice: b.closureChoice } : {}),
                 ...extra,
                 ...(status === "In Service"
                   ? { serviceStartedAt: new Date().toISOString() }
@@ -1262,6 +1293,7 @@ export function OwnerProvider({ children }) {
         barber: barber?.name || "Barber",
         services,
         status: entry.status,
+        ...(b.closureChoice ? { closureChoice: b.closureChoice } : {}),
         message: String(message || "").trim(),
       });
     } catch (error) {
