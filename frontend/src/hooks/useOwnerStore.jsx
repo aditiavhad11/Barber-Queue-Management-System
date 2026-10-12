@@ -73,6 +73,10 @@ const normalizeDbShop = (raw) => {
     ownerId: raw.ownerId || raw.owner_id,
     status: raw.status || "pending",
     active: Boolean(raw.active),
+    isOpen:
+      availability.isOpen !== undefined
+        ? Boolean(availability.isOpen)
+        : Boolean(raw.isOpen),
     approved: raw.status === "approved",
     hours,
     photos,
@@ -324,10 +328,10 @@ export function OwnerProvider({ children }) {
                 localShop.notifications || serverShop.notifications || [],
               customers: localShop.customers || serverShop.customers || [],
               isOpen:
-                localShop.isOpen !== undefined
-                  ? localShop.isOpen
-                  : serverShop.isOpen !== undefined
-                    ? serverShop.isOpen
+                serverShop.isOpen !== undefined
+                  ? serverShop.isOpen
+                  : localShop.isOpen !== undefined
+                    ? localShop.isOpen
                     : false,
               finished:
                 localShop.finished !== undefined
@@ -468,9 +472,17 @@ export function OwnerProvider({ children }) {
             if (key === "shop") {
               const patch = typeof value === "function" ? value(s) : value;
               const nextStatus = patch.status ?? s.status;
+              const nextAvailability =
+                patch.availability || s.availability || {};
               return {
                 ...s,
                 ...patch,
+                availability: {
+                  ...nextAvailability,
+                  ...(patch.isOpen !== undefined
+                    ? { isOpen: Boolean(patch.isOpen) }
+                    : {}),
+                },
                 approved: nextStatus === "approved",
                 active: nextStatus === "approved",
               };
@@ -535,6 +547,13 @@ export function OwnerProvider({ children }) {
         ].forEach((k) => {
           if (patch[k] !== undefined) body[k] = patch[k];
         });
+        if (patch.isOpen !== undefined) {
+          body.availability = {
+            ...(existing.availability || {}),
+            ...(patch.availability || {}),
+            isOpen: Boolean(patch.isOpen),
+          };
+        }
         if (Object.keys(body).length) {
           api
             .patch(`/shops/${id}`, body, { toastOnError: false })
@@ -939,21 +958,54 @@ export function OwnerProvider({ children }) {
       const target = p.shops.find((s) => s.id === shopId);
       let queue = [...(target?.queues?.[barberId] || [])];
       const index = queue.findIndex((e) => e.id === entryId);
-      if (index < 0 || queue[index].status !== "Your Turn") return p;
+      if (
+        index < 0 ||
+        (action === "swap" &&
+          queue[index].status !== "Your Turn") ||
+        (action === "requeue" && queue[index].status !== "Your Turn") ||
+        (action === "remove" &&
+          !["Waiting", "Your Turn"].includes(queue[index].status))
+      )
+        return p;
       if (action === "remove") queue[index] = { ...queue[index], status: "Cancelled" };
       else if (action === "swap") {
-        const waiting = queue.filter((e) => e.status === "Waiting");
+        const waiting = queue.filter((e) =>
+          ["Waiting", "Your Turn"].includes(e.status),
+        );
+        const currentEntry = waiting.find((e) => e.id === entryId);
         const insertionIndex = Number(targetPosition) - 1;
-        if (insertionIndex < 1 || insertionIndex > waiting.length) return p;
-        const currentEntry = queue[index];
+        if (
+          !currentEntry ||
+          insertionIndex < 0 ||
+          insertionIndex >= waiting.length ||
+          insertionIndex === 0
+        )
+          return p;
         const moved = {
           ...currentEntry,
           status: "Waiting",
           skippedAt: new Date().toISOString(),
           skipCount: (currentEntry.skipCount || 0) + 1,
         };
-        waiting.splice(insertionIndex, 0, moved);
-        queue = waiting;
+        const reordered = waiting.filter((e) => e.id !== entryId);
+        reordered.splice(insertionIndex, 0, moved);
+        const first = reordered[0]?.id;
+        const reorderableIds = new Set(reordered.map((e) => e.id));
+        queue = queue.map((e) =>
+          reorderableIds.has(e.id)
+            ? {
+                ...e,
+                ...(reordered.find((item) => item.id === e.id) || {}),
+                status: e.id === first ? "Your Turn" : "Waiting",
+              }
+            : e,
+        );
+        queue.sort((a, b) => {
+          const ai = reordered.findIndex((e) => e.id === a.id);
+          const bi = reordered.findIndex((e) => e.id === b.id);
+          if (ai < 0 || bi < 0) return 0;
+          return ai - bi;
+        });
       } else {
         const [movingEntry] = queue.splice(index, 1);
         const moving = { ...movingEntry };
@@ -1566,6 +1618,9 @@ export function OwnerProvider({ children }) {
                 b.acceptedAt || b.paidAt || Date.now(),
               ).getTime(),
               createdAt: b.acceptedAt || b.paidAt || new Date().toISOString(),
+              ...(b.queuePosition
+                ? { queuePosition: Number(b.queuePosition) }
+                : {}),
               skipCount: b.skipCount || 0,
               ...(b.skippedAt ? { skippedAt: b.skippedAt } : {}),
               ...(b.completedAt ? { completedAt: b.completedAt } : {}),
@@ -1618,7 +1673,34 @@ export function OwnerProvider({ children }) {
               .map((b) => list.find((e) => e.id === b.queueId))
               .filter(Boolean);
             const rest = list.filter((e) => !serverIds.has(e.id));
-            queues[barberId] = normalizeQueue([...fromServer, ...rest]);
+            const beforeOrder = list.map((entry) => `${entry.id}:${entry.status}`).join("|");
+            let nextQueue;
+            if (sessionRole === "customer") {
+              const positioned = Array(list.length).fill(null);
+              const positionedIds = new Set();
+              for (const entry of fromServer) {
+                const source = mine.find((b) => b.queueId === entry.id);
+                const requestedIndex = Number(source?.queuePosition || 0) - 1;
+                if (requestedIndex < 0) continue;
+                let targetIndex = Math.min(requestedIndex, positioned.length - 1);
+                while (targetIndex < positioned.length && positioned[targetIndex])
+                  targetIndex += 1;
+                if (targetIndex < positioned.length) {
+                  positioned[targetIndex] = entry;
+                  positionedIds.add(entry.id);
+                }
+              }
+              const remaining = rest.filter((entry) => !positionedIds.has(entry.id));
+              let remainingIndex = 0;
+              nextQueue = normalizeQueue(
+                positioned.map((entry) => entry || remaining[remainingIndex++]).filter(Boolean),
+              );
+            } else {
+              nextQueue = normalizeQueue([...fromServer, ...rest]);
+            }
+            const afterOrder = nextQueue.map((entry) => `${entry.id}:${entry.status}`).join("|");
+            if (beforeOrder !== afterOrder) changed = true;
+            queues[barberId] = nextQueue;
           }
           return { ...shop, queues, payments, customers: [...customers] };
         });

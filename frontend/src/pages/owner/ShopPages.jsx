@@ -19,6 +19,7 @@ import {
   hoursFromSchedule,
   scheduleError,
   getTemporaryClosure,
+  toLocalDateString,
 } from "../../utils/closedDays";
 import WeeklyHours from "../../components/owner/WeeklyHours";
 import AnnualSchedule from "../../components/owner/AnnualSchedule";
@@ -40,6 +41,42 @@ export function Overview() {
   const base = sessionRole === "shop" ? "/shop" : "/owner";
   const prim = shop.photos.find((p) => p.primary) || shop.photos[0];
   const closure = getTemporaryClosure(shop);
+  const [showHoursOverride, setShowHoursOverride] = useState(false);
+  const [override, setOverride] = useState({
+    open: shop.availability?.operationalHours?.open || shop.hours.open,
+    close: shop.availability?.operationalHours?.close || shop.hours.close,
+  });
+  const hasOverride = Boolean(shop.availability?.operationalHours?.enabled);
+  const saveHoursOverride = () => {
+    if (!override.open || !override.close || override.close <= override.open) {
+      notifyError("Closing time must be after opening time.");
+      return;
+    }
+    up("shop", (p) => ({
+      ...p,
+      availability: {
+        ...(p.availability || {}),
+        operationalHours: {
+          ...override,
+          date: toLocalDateString(),
+          enabled: true,
+        },
+      },
+    }));
+    setShowHoursOverride(false);
+    notifySuccess("Today's flexible hours are active.");
+  };
+  const clearHoursOverride = () => {
+    up("shop", (p) => ({
+      ...p,
+      availability: {
+        ...(p.availability || {}),
+        operationalHours: { enabled: false },
+      },
+    }));
+    setShowHoursOverride(false);
+    notifySuccess("Regular hours restored.");
+  };
   return (
     <>
       <PageHead
@@ -91,17 +128,29 @@ export function Overview() {
           </p>
         </div>
         {shop.status === "approved" && (
-          <button
-            className={shop.isOpen ? "btn-ghost" : "btn"}
-            onClick={() => up("shop", (p) => ({ ...p, isOpen: !p.isOpen }))}
-          >
-            {shop.isOpen ? "Close shop" : "Open shop"}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className={shop.isOpen ? "btn-ghost" : "btn"}
+              onClick={() => up("shop", (p) => ({ ...p, isOpen: !p.isOpen }))}
+            >
+              {shop.isOpen ? "Close shop" : "Open shop"}
+            </button>
+            <button
+              className="btn-ghost"
+              onClick={() => setShowHoursOverride(true)}
+            >
+              {hasOverride ? "Edit flexible hours" : "Open with flexible hours"}
+            </button>
+          </div>
         )}
       </div>
       <p className="text-xs text-coffee/60 mt-2">
         Shop open/closed is separate from each barber's availability and each
         service's enabled state.
+      </p>
+      <p className="text-xs text-coffee/60 mt-1">
+        Regular hours are {shop.hours.open} - {shop.hours.close}. Flexible
+        hours can temporarily extend today's opening window.
       </p>
 
       {shop.status === "approved" && (
@@ -111,6 +160,54 @@ export function Overview() {
             up("shop", (p) => ({ ...p, availability: nextAvail }))
           }
         />
+      )}
+
+      {showHoursOverride && (
+        <Modal
+          title="Flexible hours for today"
+          onClose={() => setShowHoursOverride(false)}
+          actions={
+            <>
+              {hasOverride && (
+                <button className="btn-ghost" onClick={clearHoursOverride}>
+                  Restore regular hours
+                </button>
+              )}
+              <button className="btn" onClick={saveHoursOverride}>
+                Save flexible hours
+              </button>
+            </>
+          }
+        >
+          <p className="text-coffee/70">
+            Use this when you want to open earlier or close later than the
+            regular schedule. Customers can book while the shop is open.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <label>
+              Opens
+              <input
+                className="input mt-1"
+                type="time"
+                value={override.open}
+                onChange={(e) =>
+                  setOverride((p) => ({ ...p, open: e.target.value }))
+                }
+              />
+            </label>
+            <label>
+              Closes
+              <input
+                className="input mt-1"
+                type="time"
+                value={override.close}
+                onChange={(e) =>
+                  setOverride((p) => ({ ...p, close: e.target.value }))
+                }
+              />
+            </label>
+          </div>
+        </Modal>
       )}
 
       <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-5 mt-6 items-stretch">

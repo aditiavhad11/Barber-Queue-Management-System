@@ -264,14 +264,83 @@ const QUEUE_STATUSES = [
 // Every accepted booking is a queue entry. Owners/shops get their shops' entries, customers their own.
 export async function listQueue(req, res) {
   const isCustomer = req.user.role === "customer";
-  const { sql, params } = isCustomer
-    ? { sql: "b.customer_id=?", params: [req.user.sub] }
-    : scope(req);
-  const rows = await findBookings(
-    `b.status='accepted' AND ${sql}`,
-    params,
-    "ORDER BY COALESCE(b.skipped_at, b.accepted_at) ASC LIMIT 500",
-  );
+  let rows = [];
+
+  if (isCustomer) {
+    const ownRows = await findBookings(
+      "b.status='accepted' AND b.customer_id=?",
+      [req.user.sub],
+      "ORDER BY COALESCE(b.skipped_at, b.accepted_at) ASC LIMIT 100",
+    );
+
+    if (!ownRows.length) return res.json([]);
+
+    const queueScopes = [
+      ...new Map(
+        ownRows.map((row) => [
+          `${row.shop_id}:${row.barber_id}`,
+          { shopId: row.shop_id, barberId: row.barber_id },
+        ]),
+      ).values(),
+    ];
+    const scopeSql = queueScopes
+      .map(() => "(b.shop_id=? AND b.barber_id=?)")
+      .join(" OR ");
+    const scopeParams = queueScopes.flatMap((scope) => [
+      scope.shopId,
+      scope.barberId,
+    ]);
+    const ownIds = ownRows.map((row) => row.id);
+    const ownSql = ownIds.map(() => "?").join(",");
+
+    rows = await findBookings(
+      `b.status='accepted' AND (
+        b.id IN (${ownSql})
+        OR (
+          b.queue_status IN ('Waiting','Your Turn','In Service')
+          AND (${scopeSql})
+        )
+      )`,
+      [...ownIds, ...scopeParams],
+      "ORDER BY COALESCE(b.skipped_at, b.accepted_at) ASC, b.accepted_at ASC, b.id ASC LIMIT 500",
+    );
+
+    await Promise.all(
+      rows.map(async (row) => {
+        const [positionRows] = await pool.query(
+          `SELECT COUNT(*) + 1 AS queue_position
+           FROM payment_bookings x
+           WHERE x.shop_id=? AND x.barber_id=? AND x.status='accepted'
+             AND x.queue_status IN ('Waiting', 'Your Turn')
+             AND (
+               COALESCE(x.skipped_at, x.accepted_at) < COALESCE(?, ?)
+               OR (
+                 COALESCE(x.skipped_at, x.accepted_at) = COALESCE(?, ?)
+                 AND x.id <= ?
+               )
+             )`,
+          [
+            row.shop_id,
+            row.barber_id,
+            row.skipped_at,
+            row.accepted_at,
+            row.skipped_at,
+            row.accepted_at,
+            row.id,
+          ],
+        );
+        row.queue_position = positionRows[0]?.queue_position;
+      }),
+    );
+  } else {
+    const { sql, params } = scope(req);
+    rows = await findBookings(
+      `b.status='accepted' AND ${sql}`,
+      params,
+      "ORDER BY COALESCE(b.skipped_at, b.accepted_at) ASC, b.accepted_at ASC, b.id ASC LIMIT 500",
+    );
+  }
+
   res.json(await hydrateBookings(rows));
 }
 
@@ -304,9 +373,19 @@ export async function setQueueStatus(req, res) {
   const current = booking.queueStatus || "Waiting";
 
   if (action) {
-    if (current !== "Your Turn")
+    if (
+      action === "requeue" &&
+      current !== "Your Turn"
+    )
       return res.status(409).json({
         message: "These actions are available only when it is your turn.",
+      });
+    if (
+      action === "remove" &&
+      !["Waiting", "Your Turn"].includes(current)
+    )
+      return res.status(409).json({
+        message: "Only an active queue ticket can be removed.",
       });
 
     if (req.user.role === "customer" && booking.customerId !== req.user.sub)
@@ -325,35 +404,44 @@ export async function setQueueStatus(req, res) {
           `SELECT id
            FROM payment_bookings
            WHERE barber_id=? AND shop_id=? AND status='accepted'
-             AND queue_status='Waiting'
-           ORDER BY COALESCE(skipped_at, accepted_at), accepted_at
+             AND queue_status IN ('Waiting', 'Your Turn')
+           ORDER BY COALESCE(skipped_at, accepted_at), accepted_at, id
            FOR UPDATE`,
           [booking.barberId, booking.shopId],
         );
+        const currentIndex = waitingRows.findIndex((row) => row.id === booking.id);
         const targetIndex = Number.isInteger(requestedPosition)
           ? requestedPosition - 1
-          : 0;
+          : -1;
 
         if (
-          targetIndex < 1 ||
-          targetIndex > waitingRows.length ||
-          !waitingRows.length
+          currentIndex !== 0 ||
+          targetIndex < 0 ||
+          targetIndex >= waitingRows.length
         ) {
           await connection.rollback();
           return res
             .status(409)
-            .json({ message: "Choose a valid position in the queue." });
+            .json({ message: "Choose a valid position in the active queue." });
+        }
+
+        if (targetIndex === currentIndex) {
+          await connection.rollback();
+          return res
+            .status(409)
+            .json({ message: "Choose a different queue position." });
         }
 
         const orderedIds = waitingRows.map((row) => row.id);
+        orderedIds.splice(currentIndex, 1);
         orderedIds.splice(targetIndex, 0, booking.id);
         for (let index = 0; index < orderedIds.length; index += 1) {
           const id = orderedIds[index];
           await connection.query(
             `UPDATE payment_bookings
-             SET queue_status=?, skipped_at=DATE_ADD(NOW(), INTERVAL ${index} SECOND)
+             SET queue_status=?, skipped_at=DATE_ADD(NOW(), INTERVAL ? SECOND)
              WHERE id=?`,
-            [index === 0 ? "Your Turn" : "Waiting", id],
+            [index === 0 ? "Your Turn" : "Waiting", index, id],
           );
         }
 

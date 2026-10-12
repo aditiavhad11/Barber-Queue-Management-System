@@ -589,6 +589,23 @@ export async function updateShop(req, res) {
     add("availability_json", JSON.stringify(b.availability || {}));
   }
 
+  if (b.isOpen !== undefined && b.availability === undefined) {
+    const [currentRows] = await pool.query(
+      "SELECT availability_json FROM shops WHERE id=? LIMIT 1",
+      [shopId],
+    );
+    const currentAvailability =
+      currentRows[0]?.availability_json || {};
+    const availability =
+      typeof currentAvailability === "string"
+        ? JSON.parse(currentAvailability || "{}")
+        : currentAvailability;
+    add(
+      "availability_json",
+      JSON.stringify({ ...availability, isOpen: Boolean(b.isOpen) }),
+    );
+  }
+
   if (b.policy !== undefined)
     add("policies_json", JSON.stringify(b.policy || {}));
 

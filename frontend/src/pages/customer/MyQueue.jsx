@@ -55,7 +55,9 @@ export default function MyQueue() {
     : [selected.service].filter(Boolean);
   const queue = shop.queues?.[selected.barberId] || [];
   const active = activeOf(queue);
-  const waitingEntries = active.filter((item) => item.status === "Waiting");
+  const reorderableEntries = active.filter((item) =>
+    ["Waiting", "Your Turn"].includes(item.status),
+  );
   const index = active.findIndex((e) => e.id === entry.id);
   const position = index >= 0 ? index + 1 : null;
   const wait =
@@ -84,8 +86,13 @@ export default function MyQueue() {
       setDistance(null);
     }
   };
-  const cancel = () =>
+  const cancel = () => {
+    const ok = window.confirm(
+      "Cancel this booking and remove yourself from the queue?",
+    );
+    if (!ok) return;
     setQueueStatus(shop.id, selected.barberId, entry.id, "Cancelled");
+  };
   const addSelected = async () => {
     if (!selectedServices.length || paying) return;
     setPaying(true);
@@ -107,7 +114,9 @@ export default function MyQueue() {
       setPaying(false);
     }
   };
-  const positionOptions = waitingEntries.map((_, index) => index + 2);
+  const positionOptions = reorderableEntries
+    .map((_, queueIndex) => queueIndex + 1)
+    .filter((target) => target !== position);
   const swapTarget = positionOptions.includes(Number(swapTargetPosition))
     ? Number(swapTargetPosition)
     : positionOptions[0] || 0;
@@ -192,11 +201,13 @@ export default function MyQueue() {
           </Badge>
           {entry.status === "Your Turn" && (
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm text-gold">Please head to the shop.</span>
-              {waitingEntries.length > 0 && (
+              <span className="text-sm text-gold">
+                Please head to the shop.
+              </span>
+              {positionOptions.length > 0 && (
                 <>
                   <label className="flex items-center gap-2 text-sm">
-                    Swap with position
+                    Change to position
                     <select
                       className="input !w-auto !py-1.5"
                       value={swapTarget}
@@ -221,16 +232,10 @@ export default function MyQueue() {
                       )
                     }
                   >
-                    Swap customer
+                    Change position
                   </button>
                 </>
               )}
-              <button className="btn-ghost !py-1.5" onClick={() => queueAction(shop.id, selected.barberId, entry.id, "requeue")}>
-                Go back to queue
-              </button>
-              <button className="btn-ghost !py-1.5 text-rose" onClick={() => queueAction(shop.id, selected.barberId, entry.id, "remove")}>
-                Remove from queue
-              </button>
             </div>
           )}
           {entry.status === "In Service" && (
@@ -396,21 +401,8 @@ export default function MyQueue() {
           </div>
         )}
 
-        {activeStatuses.includes(entry.status) && (
+        {entry.status === "Waiting" && (
           <div className="flex flex-wrap gap-3 mt-8">
-            <button className="btn" onClick={findDistance}>
-              <Navigation size={16} />
-              Check distance
-            </button>
-            <a
-              className="btn-ghost"
-              target="_blank"
-              rel="noreferrer"
-              href={`https://maps.google.com/?q=${encodeURIComponent(shop.location?.confirmed ? `${shop.location.lat},${shop.location.lng}` : shop.address)}`}
-            >
-              <Navigation size={16} />
-              Directions
-            </a>
             <button
               className="btn-ghost !border-rose !text-rose hover:!bg-rose hover:!text-cream"
               onClick={cancel}

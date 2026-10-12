@@ -20,7 +20,7 @@ export const Badge = ({ tone = "ok", children }) => {
   );
 };
 export const Empty = ({ title, text, action }) => (
-  <div className="border border-dashed border-khaki p-10 text-center rounded-md">
+  <div className="border border-dashed border-khaki p-10 text-center rounded-md w-full">
     <h3 className="text-2xl">{title}</h3>
     <p className="mt-1 text-soft">{text}</p>
     {action}

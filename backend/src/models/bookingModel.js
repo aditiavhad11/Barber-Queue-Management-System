@@ -79,6 +79,7 @@ export async function hydrateBookings(rows) {
       paymentId: row.payment_reference || null,
       token: row.token || null,
       queueId: row.queue_id || null,
+      queuePosition: Number(row.queue_position || 0) || null,
       failureReason: row.failure_reason || "",
       refundStatus: row.refund_status || null,
       declineReason: row.decline_reason || "",
