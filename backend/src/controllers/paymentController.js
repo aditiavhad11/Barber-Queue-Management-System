@@ -139,6 +139,53 @@ async function validateSelection(
     typeof shops[0].availability_json === "string"
       ? JSON.parse(shops[0].availability_json || "{}")
       : shops[0].availability_json || {};
+  const now = new Date();
+  const istParts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+  const part = (type) => istParts.find((item) => item.type === type)?.value;
+  const today = `${part("year")}-${part("month")}-${part("day")}`;
+  const currentTime = `${part("hour")}:${part("minute")}`;
+  if (avail.isOpen === false) {
+    throw Object.assign(new Error("This shop is currently closed."), {
+      status: 409,
+    });
+  }
+  if (bookingDate === today) {
+    const weekday = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Kolkata",
+      weekday: "short",
+    }).format(now);
+    const schedule = avail.schedule?.[weekday];
+    const override = avail.operationalHours;
+    const annual = avail.annualSchedules?.[bookingDate];
+    const shifts = override?.enabled &&
+      (!override.date || override.date === today)
+      ? [{ open: override.open, close: override.close }]
+      : annual && ["half_day", "special_hours"].includes(annual.type)
+        ? [{ open: annual.open, close: annual.close }]
+      : Array.isArray(schedule?.shifts) && schedule.shifts.length
+        ? schedule.shifts
+        : [{ open: schedule?.open || "09:00", close: schedule?.close || "21:00" }];
+    if (
+      annual?.type === "closed" ||
+      (!annual && schedule?.closed) ||
+      !shifts.some(
+        (shift) => currentTime >= shift.open && currentTime < shift.close,
+      )
+    ) {
+      throw Object.assign(
+        new Error("This shop is outside its booking hours right now."),
+        { status: 409 },
+      );
+    }
+  }
   const tc = avail?.temporaryClosure;
   if (tc && tc.active) {
     const today = new Date().toISOString().slice(0, 10);

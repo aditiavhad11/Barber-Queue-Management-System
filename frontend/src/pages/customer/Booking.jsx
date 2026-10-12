@@ -5,6 +5,7 @@ import { api } from "../../services/api";
 import { Badge, Rating } from "../../components/common/ui";
 import { activeOf, etaFor } from "../../utils/ownerEta";
 import {
+  isShopOpenNow,
   getTemporaryClosure,
   formatDateDisplay,
 } from "../../utils/closedDays";
@@ -92,7 +93,8 @@ export default function Booking() {
         };
 
   const loadQuote = async () => {
-    if (!shop || !barber || !sids.length || blockedSelection || quoteBusy) return;
+    if (!shop || !barber || !sids.length || blockedSelection || quoteBusy)
+      return;
     setQuoteBusy(true);
     setPaymentError("");
     try {
@@ -273,6 +275,23 @@ export default function Booking() {
     );
   }
 
+  if (!isShopOpenNow(shop)) {
+    return (
+      <div className="fade max-w-xl mx-auto py-12">
+        <div className="border border-khaki p-6 rounded-md">
+          <h2 className="font-semibold text-xl">Shop is currently closed</h2>
+          <p className="text-sm text-coffee/70 mt-2">
+            The owner needs to open the shop before new bookings can be made.
+            Please check again during the regular or flexible hours.
+          </p>
+          <Link to={`/app/shops/${shop.id}`} className="btn mt-5 inline-block">
+            Back to shop
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="fade max-w-3xl">
       <p className="label">{shop.name}</p>
@@ -309,10 +328,14 @@ export default function Booking() {
             />
           </label>
           {availabilityLoading && (
-            <p className="text-sm text-coffee/70">Checking service availability...</p>
+            <p className="text-sm text-coffee/70">
+              Checking service availability...
+            </p>
           )}
           {availabilityError && (
-            <p className="text-sm text-rose" role="alert">{availabilityError}</p>
+            <p className="text-sm text-rose" role="alert">
+              {availabilityError}
+            </p>
           )}
           <div className="border-t border-khaki">
             {shop.servicesList
@@ -322,31 +345,35 @@ export default function Booking() {
                 const isSelected = sids.includes(s.id);
                 return (
                   <button
-                  key={s.id}
-                  onClick={() => toggleService(s.id)}
-                  disabled={!!restriction && !isSelected}
-                  className={`w-full flex justify-between items-center py-4 px-3 border-b border-khaki text-left disabled:opacity-70 ${isSelected ? "bg-olive/15" : ""}`}
-                >
-                  <span className="flex gap-3 items-start">
-                    <span
-                      className={`mt-1 w-4 h-4 border grid place-items-center text-xs ${sids.includes(s.id) ? "bg-olive text-[#1C1713] border-coffee" : "border-coffee/40"}`}
-                    >
-                      {sids.includes(s.id) ? "✓" : ""}
-                    </span>
-                    <span>
-                      <b>{s.name}</b>
-                      <br />
-                      <span className="text-sm text-coffee/70">
-                        {s.duration} min
+                    key={s.id}
+                    onClick={() => toggleService(s.id)}
+                    disabled={!!restriction && !isSelected}
+                    className={`w-full flex justify-between items-center py-4 px-3 border-b border-khaki text-left disabled:opacity-70 ${isSelected ? "bg-olive/15" : ""}`}
+                  >
+                    <span className="flex gap-3 items-start">
+                      <span
+                        className={`mt-1 w-4 h-4 border grid place-items-center text-xs ${sids.includes(s.id) ? "bg-olive text-[#1C1713] border-coffee" : "border-coffee/40"}`}
+                      >
+                        {sids.includes(s.id) ? "✓" : ""}
                       </span>
-                      {restriction && (
-                        <span className="block text-sm text-rose mt-1">
-                          {s.name} is unavailable on {formatDateDisplay(bookingDate, true)}.{restriction.reason ? ` Reason: ${restriction.reason}` : ""}
+                      <span>
+                        <b>{s.name}</b>
+                        <br />
+                        <span className="text-sm text-coffee/70">
+                          {s.duration} min
                         </span>
-                      )}
+                        {restriction && (
+                          <span className="block text-sm text-rose mt-1">
+                            {s.name} is unavailable on{" "}
+                            {formatDateDisplay(bookingDate, true)}.
+                            {restriction.reason
+                              ? ` Reason: ${restriction.reason}`
+                              : ""}
+                          </span>
+                        )}
+                      </span>
                     </span>
-                  </span>
-                  <span>₹{s.price}</span>
+                    <span>₹{s.price}</span>
                   </button>
                 );
               })}
@@ -442,7 +469,7 @@ export default function Booking() {
             <div className="flex gap-2">
               <button
                 type="button"
-                className={`btn-ghost ${forWhom === "self" ? "!bg-olive !text-[#1C1713]" : ""}`}
+                className={`btn-ghost ${forWhom === "self" ? "bg-khaki !text-[#1C1713]" : ""}`}
                 onClick={() => setForWhom("self")}
               >
                 Myself

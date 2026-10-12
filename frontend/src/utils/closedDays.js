@@ -133,6 +133,16 @@ export const isShopOpenNow = (shop, date = new Date()) => {
   const currentM = String(date.getMinutes()).padStart(2, "0");
   const now = `${currentH}:${currentM}`;
 
+  const override = shop?.availability?.operationalHours;
+  if (
+    override?.enabled &&
+    (!override.date || override.date === toLocalDateString(date)) &&
+    /^\d{2}:\d{2}$/.test(String(override.open)) &&
+    /^\d{2}:\d{2}$/.test(String(override.close))
+  ) {
+    return now >= override.open && now < override.close;
+  }
+
   if (annual && ["half_day", "special_hours"].includes(annual.type)) {
     return now >= annual.open && now < annual.close;
   }
