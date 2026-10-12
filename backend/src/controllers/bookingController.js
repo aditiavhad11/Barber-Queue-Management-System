@@ -264,15 +264,47 @@ const QUEUE_STATUSES = [
 // Every accepted booking is a queue entry. Owners/shops get their shops' entries, customers their own.
 export async function listQueue(req, res) {
   const isCustomer = req.user.role === "customer";
-  const { sql, params } = isCustomer
-    ? { sql: "b.customer_id=?", params: [req.user.sub] }
-    : scope(req);
-  const rows = await findBookings(
-    `b.status='accepted' AND ${sql}`,
-    params,
-    "ORDER BY COALESCE(b.skipped_at, b.accepted_at) ASC LIMIT 500",
-  );
+  let rows = [];
+
   if (isCustomer) {
+    const ownRows = await findBookings(
+      "b.status='accepted' AND b.customer_id=?",
+      [req.user.sub],
+      "ORDER BY COALESCE(b.skipped_at, b.accepted_at) ASC LIMIT 100",
+    );
+
+    if (!ownRows.length) return res.json([]);
+
+    const queueScopes = [
+      ...new Map(
+        ownRows.map((row) => [
+          `${row.shop_id}:${row.barber_id}`,
+          { shopId: row.shop_id, barberId: row.barber_id },
+        ]),
+      ).values(),
+    ];
+    const scopeSql = queueScopes
+      .map(() => "(b.shop_id=? AND b.barber_id=?)")
+      .join(" OR ");
+    const scopeParams = queueScopes.flatMap((scope) => [
+      scope.shopId,
+      scope.barberId,
+    ]);
+    const ownIds = ownRows.map((row) => row.id);
+    const ownSql = ownIds.map(() => "?").join(",");
+
+    rows = await findBookings(
+      `b.status='accepted' AND (
+        b.id IN (${ownSql})
+        OR (
+          b.queue_status IN ('Waiting','Your Turn','In Service')
+          AND (${scopeSql})
+        )
+      )`,
+      [...ownIds, ...scopeParams],
+      "ORDER BY COALESCE(b.skipped_at, b.accepted_at) ASC, b.accepted_at ASC, b.id ASC LIMIT 500",
+    );
+
     await Promise.all(
       rows.map(async (row) => {
         const [positionRows] = await pool.query(
@@ -300,7 +332,15 @@ export async function listQueue(req, res) {
         row.queue_position = positionRows[0]?.queue_position;
       }),
     );
+  } else {
+    const { sql, params } = scope(req);
+    rows = await findBookings(
+      `b.status='accepted' AND ${sql}`,
+      params,
+      "ORDER BY COALESCE(b.skipped_at, b.accepted_at) ASC, b.accepted_at ASC, b.id ASC LIMIT 500",
+    );
   }
+
   res.json(await hydrateBookings(rows));
 }
 

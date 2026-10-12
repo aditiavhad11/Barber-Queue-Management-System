@@ -1673,6 +1673,8 @@ export function OwnerProvider({ children }) {
               .map((b) => list.find((e) => e.id === b.queueId))
               .filter(Boolean);
             const rest = list.filter((e) => !serverIds.has(e.id));
+            const beforeOrder = list.map((entry) => `${entry.id}:${entry.status}`).join("|");
+            let nextQueue;
             if (sessionRole === "customer") {
               const positioned = Array(list.length).fill(null);
               const positionedIds = new Set();
@@ -1690,12 +1692,15 @@ export function OwnerProvider({ children }) {
               }
               const remaining = rest.filter((entry) => !positionedIds.has(entry.id));
               let remainingIndex = 0;
-              queues[barberId] = normalizeQueue(
+              nextQueue = normalizeQueue(
                 positioned.map((entry) => entry || remaining[remainingIndex++]).filter(Boolean),
               );
             } else {
-              queues[barberId] = normalizeQueue([...fromServer, ...rest]);
+              nextQueue = normalizeQueue([...fromServer, ...rest]);
             }
+            const afterOrder = nextQueue.map((entry) => `${entry.id}:${entry.status}`).join("|");
+            if (beforeOrder !== afterOrder) changed = true;
+            queues[barberId] = nextQueue;
           }
           return { ...shop, queues, payments, customers: [...customers] };
         });
