@@ -3,9 +3,11 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../../hooks/useAuth";
 import { notifyError, notifySuccess } from "../../utils/toast";
-
-const EMAIL_REGEX =
-  /^[A-Z0-9.!#$%&'+\/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$/i;
+import {
+  isValidEmail,
+  isValidName,
+  isValidOtp,
+} from "../../utils/validators";
 
 export default function Auth({ mode }) {
   const nav = useNavigate();
@@ -55,9 +57,19 @@ export default function Auth({ mode }) {
   const sendOtp = async (e) => {
     e?.preventDefault();
     setErr("");
-    if (!EMAIL_REGEX.test(email.trim())) {
+    if (!isValidEmail(email)) {
       setErr("Enter a valid email address.");
       return;
+    }
+    if (mode === "create") {
+      if (!name.trim() || !isValidName(name)) {
+        setErr("Enter a valid name (2 to 60 alphabetic characters).");
+        return;
+      }
+      if (!password || password.length < 8) {
+        setErr("Password must be at least 8 characters.");
+        return;
+      }
     }
     setBusy(true);
 
@@ -85,8 +97,12 @@ export default function Auth({ mode }) {
   const loginWithPassword = async (e) => {
     e.preventDefault();
     setErr("");
-    if (!EMAIL_REGEX.test(email.trim())) {
+    if (!isValidEmail(email)) {
       setErr("Enter a valid email address.");
+      return;
+    }
+    if (!password) {
+      setErr("Enter your password.");
       return;
     }
     setBusy(true);
@@ -115,6 +131,10 @@ export default function Auth({ mode }) {
   const verify = async (e) => {
     e.preventDefault();
     setErr("");
+    if (!isValidOtp(otp)) {
+      setErr("Enter the valid 6-digit verification code.");
+      return;
+    }
     setBusy(true);
 
     try {

@@ -10,6 +10,11 @@ import {
   formatDateDisplay,
 } from "../../utils/closedDays";
 import { AlertTriangle } from "lucide-react";
+import {
+  isValidEmail,
+  isValidPhone,
+  isValidName,
+} from "../../utils/validators";
 
 const steps = ["Service", "Barber", "Review", "Policies", "Payment"];
 const bookingToday = () => {
@@ -22,8 +27,6 @@ const bookingToday = () => {
   return `${parts.find((part) => part.type === "year").value}-${parts.find((part) => part.type === "month").value}-${parts.find((part) => part.type === "day").value}`;
 };
 
-const EMAIL_REGEX =
-  /^[A-Z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$/i;
 
 export default function Booking() {
   const { id } = useParams();
@@ -216,6 +219,12 @@ export default function Booking() {
     }
   };
 
+  const friendValid =
+    forWhom !== "friend" ||
+    (isValidName(friend.name) &&
+      isValidPhone(friend.mobile) &&
+      (friend.email === "" || isValidEmail(friend.email)));
+
   const canNext = [
     sids.length > 0 &&
       !!bookingDate &&
@@ -223,7 +232,7 @@ export default function Booking() {
       !availabilityLoading &&
       !availabilityError,
     !!barber && barber.status === "Available",
-    true,
+    friendValid,
     agree,
   ][step];
 
@@ -484,32 +493,69 @@ export default function Booking() {
             </div>
             {forWhom === "friend" && (
               <div className="grid md:grid-cols-2 gap-3 mt-3">
-                <input
-                  className="input"
-                  placeholder="Person's name"
-                  value={friend.name}
-                  onChange={(e) =>
-                    setFriend({ ...friend, name: e.target.value })
-                  }
-                />
-                <input
-                  className="input"
-                  placeholder="Mobile number"
-                  value={friend.mobile}
-                  onChange={(e) =>
-                    setFriend({ ...friend, mobile: e.target.value })
-                  }
-                />
-                <input
-                  className="input md:col-span-2"
-                  type="email"
-                  pattern="^[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"
-                  placeholder="Person's email"
-                  value={friend.email}
-                  onChange={(e) =>
-                    setFriend({ ...friend, email: e.target.value })
-                  }
-                />
+                <div>
+                  <input
+                    className={`input ${
+                      friend.name && !isValidName(friend.name)
+                        ? "!border-rose"
+                        : ""
+                    }`}
+                    placeholder="Person's name *"
+                    value={friend.name}
+                    onChange={(e) =>
+                      setFriend({ ...friend, name: e.target.value })
+                    }
+                  />
+                  {friend.name && !isValidName(friend.name) && (
+                    <p className="text-xs text-rose mt-1">
+                      Enter a valid name (2–60 alphabetic characters).
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <input
+                    className={`input ${
+                      friend.mobile && !isValidPhone(friend.mobile)
+                        ? "!border-rose"
+                        : ""
+                    }`}
+                    inputMode="numeric"
+                    maxLength={10}
+                    placeholder="Mobile number (10 digits) *"
+                    value={friend.mobile}
+                    onChange={(e) =>
+                      setFriend({
+                        ...friend,
+                        mobile: e.target.value.replace(/\D/g, ""),
+                      })
+                    }
+                  />
+                  {friend.mobile && !isValidPhone(friend.mobile) && (
+                    <p className="text-xs text-rose mt-1">
+                      Enter a valid 10-digit Indian mobile number.
+                    </p>
+                  )}
+                </div>
+                <div className="md:col-span-2">
+                  <input
+                    className={`input ${
+                      friend.email && !isValidEmail(friend.email)
+                        ? "!border-rose"
+                        : ""
+                    }`}
+                    type="email"
+                    placeholder="Person's email (optional)"
+                    value={friend.email}
+                    onChange={(e) =>
+                      setFriend({ ...friend, email: e.target.value })
+                    }
+                  />
+                  {friend.email && !isValidEmail(friend.email) && (
+                    <p className="text-xs text-rose mt-1">
+                      Enter a valid email address.
+                    </p>
+                  )}
+                </div>
               </div>
             )}
           </div>

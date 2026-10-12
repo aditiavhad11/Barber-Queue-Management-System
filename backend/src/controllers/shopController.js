@@ -2,6 +2,19 @@ import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import { pool } from "../config/db.js";
 import { enqueueEmergencyClosureNotifications } from "../jobs/emergencyClosureQueue.js";
+import {
+  isValidEmail,
+  isValidPhone,
+  isValidName,
+  isValidShopName,
+  isValidServiceName,
+  isValidAge,
+  isValidExperience,
+  isValidPrice,
+  isValidDuration,
+  isValidTime,
+  normalizePhone,
+} from "../utils/validators.js";
 
 /* ------------------------------------------------------------------ */
 /* Small helpers                                                       */
@@ -384,6 +397,22 @@ export async function createShop(req, res) {
       .status(400)
       .json({ message: "Shop name, contact and address are required." });
 
+  if (!isValidShopName(b.name))
+    return res
+      .status(400)
+      .json({ message: "Enter a valid shop name (2 to 100 characters)." });
+
+  if (!isValidPhone(b.contact))
+    return res
+      .status(400)
+      .json({ message: "Enter a valid 10-digit Indian contact number." });
+
+  if (b.hours?.open && !isValidTime(b.hours.open))
+    return res.status(400).json({ message: "Invalid opening time format (HH:MM)." });
+
+  if (b.hours?.close && !isValidTime(b.hours.close))
+    return res.status(400).json({ message: "Invalid closing time format (HH:MM)." });
+
   const annualError = validateAnnualSchedules(b.availability || {});
 
   if (annualError) return res.status(400).json({ message: annualError });
@@ -603,10 +632,20 @@ export async function updateShop(req, res) {
     values.push(value);
   };
 
-  if (b.name !== undefined) add("name", String(b.name).trim());
+  if (b.name !== undefined) {
+    if (!isValidShopName(b.name)) {
+      return res.status(400).json({ message: "Enter a valid shop name (2 to 100 characters)." });
+    }
+    add("name", String(b.name).trim());
+  }
   if (b.description !== undefined)
     add("description", String(b.description || ""));
-  if (b.contact !== undefined) add("contact", String(b.contact).trim());
+  if (b.contact !== undefined) {
+    if (!isValidPhone(b.contact)) {
+      return res.status(400).json({ message: "Enter a valid 10-digit Indian contact number." });
+    }
+    add("contact", normalizePhone(b.contact));
+  }
   if (b.address !== undefined) add("address", String(b.address).trim());
 
   if (b.location !== undefined) {
@@ -615,6 +654,10 @@ export async function updateShop(req, res) {
   }
 
   if (b.hours !== undefined) {
+    if (b.hours?.open && !isValidTime(b.hours.open))
+      return res.status(400).json({ message: "Invalid opening time format (HH:MM)." });
+    if (b.hours?.close && !isValidTime(b.hours.close))
+      return res.status(400).json({ message: "Invalid closing time format (HH:MM)." });
     add("hours_open", b.hours?.open || "09:00");
     add("hours_close", b.hours?.close || "21:00");
   }
@@ -742,17 +785,22 @@ export async function createService(req, res) {
   if (!(await canManageShop(req, shopId))) return notOwned(res);
 
   const name = String(req.body?.name || "").trim();
-  const price = Number(req.body?.price);
-  const duration = Number(req.body?.duration);
-  if (
-    !name ||
-    !Number.isFinite(price) ||
-    price <= 0 ||
-    !Number.isFinite(duration) ||
-    duration <= 0
-  ) {
+  const price = req.body?.price;
+  const duration = req.body?.duration;
+
+  if (!name || !isValidServiceName(name)) {
     return res.status(400).json({
-      message: "Enter a service name, positive price and positive duration.",
+      message: "Enter a valid service name (2 to 80 characters).",
+    });
+  }
+  if (!isValidPrice(price)) {
+    return res.status(400).json({
+      message: "Price must be a valid positive number.",
+    });
+  }
+  if (!isValidDuration(duration)) {
+    return res.status(400).json({
+      message: "Duration must be a positive integer in minutes.",
     });
   }
 
@@ -918,24 +966,38 @@ export async function createBarber(req, res) {
   if (!(await canManageShop(req, shopId))) return notOwned(res);
 
   const b = req.body || {};
-  if (!String(b.name || "").trim())
-    return res.status(400).json({ message: "Barber name is required." });
+  if (!String(b.name || "").trim() || !isValidName(b.name))
+    return res
+      .status(400)
+      .json({ message: "Enter a valid barber name (2 to 60 alphabetic characters)." });
 
-  // Phone validation
+  // Phone validation with regex
   if (b.phone) {
-    const phoneDigits = String(b.phone).replace(/\D/g, "");
-    if (phoneDigits.length !== 10)
+    if (!isValidPhone(b.phone))
       return res
         .status(400)
-        .json({ message: "Phone number must be exactly 10 digits." });
+        .json({ message: "Phone number must be a valid 10-digit mobile number." });
   }
-  // Age validation
+  // Email validation with regex
+  if (b.email) {
+    if (!isValidEmail(b.email))
+      return res
+        .status(400)
+        .json({ message: "Enter a valid email address." });
+  }
+  // Age validation with regex
   if (b.age !== undefined && b.age !== null && b.age !== "") {
-    const ageVal = Number(b.age);
-    if (!Number.isInteger(ageVal) || ageVal < 18 || ageVal > 70)
+    if (!isValidAge(b.age))
       return res
         .status(400)
         .json({ message: "Age must be between 18 and 70." });
+  }
+  // Experience validation with regex
+  if (b.experience !== undefined && b.experience !== null && b.experience !== "") {
+    if (!isValidExperience(b.experience))
+      return res
+        .status(400)
+        .json({ message: "Experience must be between 0 and 60 years." });
   }
 
   const id = crypto.randomUUID();
@@ -952,7 +1014,7 @@ export async function createBarber(req, res) {
         b.age !== undefined && b.age !== null && b.age !== ""
           ? Math.max(0, Number(b.age))
           : null,
-        b.phone ? String(b.phone).replace(/\D/g, "").slice(0, 20) : null,
+        b.phone ? normalizePhone(b.phone) : null,
         b.email ? String(b.email).trim().toLowerCase() : null,
         Math.max(0, Number(b.experience) || 0),
         String(b.specialization || ""),
@@ -1011,39 +1073,52 @@ export async function updateBarber(req, res) {
   };
   const b = req.body || {};
 
-  // Phone validation
-  if (b.phone !== undefined && b.phone !== null && b.phone !== "") {
-    const phoneDigits = String(b.phone).replace(/\D/g, "");
-    if (phoneDigits.length !== 10)
+  // Name validation
+  if (b.name !== undefined) {
+    if (!String(b.name).trim() || !isValidName(b.name))
       return res
         .status(400)
-        .json({ message: "Phone number must be exactly 10 digits." });
+        .json({ message: "Enter a valid barber name (2 to 60 alphabetic characters)." });
+    add("name", String(b.name).trim());
+  }
+  // Phone validation
+  if (b.phone !== undefined && b.phone !== null && b.phone !== "") {
+    if (!isValidPhone(b.phone))
+      return res
+        .status(400)
+        .json({ message: "Phone number must be a valid 10-digit mobile number." });
+    add("phone", normalizePhone(b.phone));
+  } else if (b.phone === null || b.phone === "") {
+    add("phone", null);
+  }
+  // Email validation
+  if (b.email !== undefined && b.email !== null && b.email !== "") {
+    if (!isValidEmail(b.email))
+      return res
+        .status(400)
+        .json({ message: "Enter a valid email address." });
+    add("email", String(b.email).trim().toLowerCase());
+  } else if (b.email === null || b.email === "") {
+    add("email", null);
   }
   // Age validation
   if (b.age !== undefined && b.age !== null && b.age !== "") {
-    const ageVal = Number(b.age);
-    if (!Number.isInteger(ageVal) || ageVal < 18 || ageVal > 70)
+    if (!isValidAge(b.age))
       return res
         .status(400)
         .json({ message: "Age must be between 18 and 70." });
+    add("age", Number(b.age));
+  } else if (b.age === null || b.age === "") {
+    add("age", null);
   }
-
-  if (b.name !== undefined) add("name", String(b.name).trim());
-  if (b.gender !== undefined) add("gender", String(b.gender || ""));
-  if (b.age !== undefined)
-    add(
-      "age",
-      b.age !== null && b.age !== "" ? Math.max(0, Number(b.age)) : null,
-    );
-  if (b.phone !== undefined)
-    add(
-      "phone",
-      b.phone ? String(b.phone).replace(/\D/g, "").slice(0, 20) : null,
-    );
-  if (b.email !== undefined)
-    add("email", b.email ? String(b.email).trim().toLowerCase() : null);
-  if (b.experience !== undefined)
-    add("experience_years", Math.max(0, Number(b.experience) || 0));
+  // Experience validation
+  if (b.experience !== undefined && b.experience !== null && b.experience !== "") {
+    if (!isValidExperience(b.experience))
+      return res
+        .status(400)
+        .json({ message: "Experience must be between 0 and 60 years." });
+    add("experience_years", Number(b.experience));
+  }
   if (b.specialization !== undefined)
     add("specialization", String(b.specialization || ""));
   if (b.workingDays !== undefined)
@@ -1154,10 +1229,20 @@ export async function createCoOwner(req, res) {
       ? b.permissions
       : {};
 
-  if (!name || !email || !phone) {
+  if (!name || !isValidName(name)) {
     return res
       .status(400)
-      .json({ message: "Co-Owner name, email, and phone are required." });
+      .json({ message: "Enter a valid co-owner full name (2 to 60 alphabetic characters)." });
+  }
+  if (!email || !isValidEmail(email)) {
+    return res
+      .status(400)
+      .json({ message: "Enter a valid co-owner email address." });
+  }
+  if (!phone || !isValidPhone(phone)) {
+    return res
+      .status(400)
+      .json({ message: "Enter a valid 10-digit mobile number for the co-owner." });
   }
   if (!password || password.length < 6) {
     return res
@@ -1184,7 +1269,7 @@ export async function createCoOwner(req, res) {
       shopId,
       name,
       email,
-      phone,
+      normalizePhone(phone),
       title,
       passwordHash,
       JSON.stringify(permissions),
@@ -1206,16 +1291,35 @@ export async function updateCoOwner(req, res) {
     values.push(value);
   };
 
-  if (b.name !== undefined) add("name", String(b.name).trim());
-  if (b.email !== undefined) add("email", String(b.email).trim().toLowerCase());
-  if (b.phone !== undefined) add("phone", String(b.phone).trim());
+  if (b.name !== undefined) {
+    if (!isValidName(b.name)) {
+      return res.status(400).json({ message: "Enter a valid co-owner full name (2 to 60 alphabetic characters)." });
+    }
+    add("name", String(b.name).trim());
+  }
+  if (b.email !== undefined) {
+    if (!isValidEmail(b.email)) {
+      return res.status(400).json({ message: "Enter a valid co-owner email address." });
+    }
+    add("email", String(b.email).trim().toLowerCase());
+  }
+  if (b.phone !== undefined) {
+    if (!isValidPhone(b.phone)) {
+      return res.status(400).json({ message: "Enter a valid 10-digit mobile number for the co-owner." });
+    }
+    add("phone", normalizePhone(b.phone));
+  }
   if (b.title !== undefined) add("title", String(b.title).trim());
   if (b.status !== undefined && ["active", "inactive"].includes(b.status))
     add("status", b.status);
   if (b.permissions !== undefined)
     add("permissions_json", JSON.stringify(b.permissions));
-  if (b.password)
+  if (b.password) {
+    if (String(b.password).length < 6) {
+      return res.status(400).json({ message: "Password must be at least 6 characters." });
+    }
     add("password_hash", await bcrypt.hash(String(b.password), 10));
+  }
 
   if (fields.length) {
     await pool.query(

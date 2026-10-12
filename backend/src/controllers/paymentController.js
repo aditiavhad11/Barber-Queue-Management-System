@@ -6,6 +6,12 @@ import {
   hydrateBookings,
   rupees,
 } from "../models/bookingModel.js";
+import {
+  isValidEmail,
+  isValidPhone,
+  isValidName,
+  normalizePhone,
+} from "../utils/validators.js";
 
 const REBOOK_BLOCK_MINUTES = 30;
 const AMOUNT_WINDOW_MINUTES = 15;
@@ -103,18 +109,32 @@ function beneficiaryFrom(body, customer) {
         .trim()
         .toLowerCase(),
     };
-    if (!person.name)
-      return { error: "Enter the name of the person being booked for." };
+    if (!person.name || !isValidName(person.name))
+      return {
+        error:
+          "Enter a valid name (2 to 60 alphabetic characters) for the person being booked for.",
+      };
+    if (person.mobile && !isValidPhone(person.mobile))
+      return { error: "Enter a valid 10-digit mobile number." };
+    if (person.email && !isValidEmail(person.email))
+      return { error: "Enter a valid email address." };
     return {
-      person,
+      person: {
+        ...person,
+        mobile: person.mobile ? normalizePhone(person.mobile) : "",
+      },
       key: `beneficiary:${person.name.toLowerCase()}|${person.mobile || person.email || ""}`,
     };
+  }
+  const selfMobile = String(raw.mobile || "").trim();
+  if (selfMobile && !isValidPhone(selfMobile)) {
+    return { error: "Enter a valid 10-digit mobile number." };
   }
   return {
     person: {
       isSelf: true,
       name: customer.name,
-      mobile: String(raw.mobile || "").trim(),
+      mobile: selfMobile ? normalizePhone(selfMobile) : "",
       email: customer.email,
     },
     key: `user:${customer.id}`,

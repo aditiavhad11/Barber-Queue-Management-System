@@ -11,6 +11,13 @@ import {
 import { activeOf } from "../../utils/ownerEta";
 import { uploadImage, ACCEPTED, MAX_MB } from "../../services/upload";
 import { notifySuccess } from "../../utils/toast";
+import {
+  isValidName,
+  isValidPhone,
+  isValidEmail,
+  isValidAge,
+  isValidExperience,
+} from "../../utils/validators";
 
 const ALL_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -38,15 +45,35 @@ export default function Barbers() {
   const qlen = (id) => activeOf(queues[id] || []).length;
 
   const save = async () => {
-    if (!form.name.trim())
-      return setForm({ ...form, err: "Name is required." });
+    if (!form.name.trim() || !isValidName(form.name))
+      return setForm({
+        ...form,
+        err: "Enter a valid barber name (2 to 60 alphabetic characters).",
+      });
     if (!form.services.length)
       return setForm({ ...form, err: "Assign at least one service." });
-    if (form.age !== "" && form.age !== undefined && (isNaN(+form.age) || +form.age < 18 || +form.age > 70))
+    if (
+      form.age !== "" &&
+      form.age !== undefined &&
+      !isValidAge(form.age)
+    )
       return setForm({ ...form, err: "Age must be between 18 and 70." });
-    const phoneDigits = String(form.phone || "").replace(/\D/g, "");
-    if (phoneDigits && phoneDigits.length !== 10)
-      return setForm({ ...form, err: "Phone number must be exactly 10 digits." });
+    if (form.phone && !isValidPhone(form.phone))
+      return setForm({
+        ...form,
+        err: "Phone number must be a valid 10-digit Indian mobile number.",
+      });
+    if (form.email && !isValidEmail(form.email))
+      return setForm({ ...form, err: "Enter a valid email address." });
+    if (
+      form.experience !== "" &&
+      form.experience !== undefined &&
+      !isValidExperience(form.experience)
+    )
+      return setForm({
+        ...form,
+        err: "Experience must be between 0 and 60 years.",
+      });
     try {
       await saveBarber(form);
       setForm(null);
