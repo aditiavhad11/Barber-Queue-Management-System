@@ -1,6 +1,14 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useState } from "react";
-import { Plus, MapPin, Clock, Trash2, MessageSquareText, Users, CalendarDays } from "lucide-react";
+import {
+  Plus,
+  MapPin,
+  Clock,
+  Trash2,
+  MessageSquareText,
+  Users,
+  CalendarDays,
+} from "lucide-react";
 import { useOwner } from "../../hooks/useOwnerStore";
 import {
   PageHead,
@@ -118,14 +126,15 @@ export default function MyShops() {
                     ? s.hours
                     : `${s.hours?.open || ""} - ${s.hours?.close || ""}`}
                 </p>
-                <p>
-                  <span className="label">Shop login</span>{" "}
-                  {s.loginEmail || "Not configured"}
-                </p>
+
                 <p className="flex items-center gap-1.5 pt-0.5">
                   <Users size={14} className="text-coffee/60" />
                   <span className="label">Co-Owners</span>
-                  <span>{s.coOwners?.length ? `${s.coOwners.length} assigned` : "None"}</span>
+                  <span>
+                    {s.coOwners?.length
+                      ? `${s.coOwners.length} assigned`
+                      : "None"}
+                  </span>
                 </p>
               </div>
               <div className="flex flex-wrap gap-3 mt-5">

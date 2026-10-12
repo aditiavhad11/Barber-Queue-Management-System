@@ -1,6 +1,14 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Trash2, Upload, Users, Eye, EyeOff, ShieldCheck } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  Upload,
+  Users,
+  Eye,
+  EyeOff,
+  ShieldCheck,
+} from "lucide-react";
 import { useOwner } from "../../hooks/useOwnerStore";
 import { PageHead } from "../../components/common/ui";
 import PhotoUploader from "../../components/owner/PhotoUploader";
@@ -77,13 +85,48 @@ export default function CreateShop() {
   ]);
   const [barbers, setBarbers] = useState([newBarber()]);
   const [schedule, setSchedule] = useState(() => ({
-    Mon: { open: "09:00", close: "21:00", closed: false, shifts: [{ open: "09:00", close: "21:00" }] },
-    Tue: { open: "09:00", close: "21:00", closed: true, shifts: [{ open: "09:00", close: "21:00" }] },
-    Wed: { open: "09:00", close: "21:00", closed: true, shifts: [{ open: "09:00", close: "21:00" }] },
-    Thu: { open: "09:00", close: "21:00", closed: true, shifts: [{ open: "09:00", close: "21:00" }] },
-    Fri: { open: "09:00", close: "21:00", closed: true, shifts: [{ open: "09:00", close: "21:00" }] },
-    Sat: { open: "09:00", close: "21:00", closed: true, shifts: [{ open: "09:00", close: "21:00" }] },
-    Sun: { open: "09:00", close: "21:00", closed: true, shifts: [{ open: "09:00", close: "21:00" }] },
+    Mon: {
+      open: "09:00",
+      close: "21:00",
+      closed: false,
+      shifts: [{ open: "09:00", close: "21:00" }],
+    },
+    Tue: {
+      open: "09:00",
+      close: "21:00",
+      closed: true,
+      shifts: [{ open: "09:00", close: "21:00" }],
+    },
+    Wed: {
+      open: "09:00",
+      close: "21:00",
+      closed: true,
+      shifts: [{ open: "09:00", close: "21:00" }],
+    },
+    Thu: {
+      open: "09:00",
+      close: "21:00",
+      closed: true,
+      shifts: [{ open: "09:00", close: "21:00" }],
+    },
+    Fri: {
+      open: "09:00",
+      close: "21:00",
+      closed: true,
+      shifts: [{ open: "09:00", close: "21:00" }],
+    },
+    Sat: {
+      open: "09:00",
+      close: "21:00",
+      closed: true,
+      shifts: [{ open: "09:00", close: "21:00" }],
+    },
+    Sun: {
+      open: "09:00",
+      close: "21:00",
+      closed: true,
+      shifts: [{ open: "09:00", close: "21:00" }],
+    },
   }));
   const [annualSchedules, setAnnualSchedules] = useState({});
   const [pol, setPol] = useState(
@@ -139,15 +182,24 @@ export default function CreateShop() {
       const he = scheduleError(schedule);
       if (he) x.hours = he;
     }
-    if (!barbers.length || barbers.some((b) => !b.name.trim() || !isValidName(b.name)))
-      x.barbers = "Add a valid name (2 to 60 alphabetic characters) for every barber.";
+    if (
+      !barbers.length ||
+      barbers.some((b) => !b.name.trim() || !isValidName(b.name))
+    )
+      x.barbers =
+        "Add a valid name (2 to 60 alphabetic characters) for every barber.";
     if (barbers.some((b) => !b.services.length))
       x.barberServices = "Assign at least one service to every barber.";
     if (barbers.some((b) => b.phone && !isValidPhone(b.phone)))
-      x.barberPhone = "Each barber phone must be a valid 10-digit mobile number.";
+      x.barberPhone =
+        "Each barber phone must be a valid 10-digit mobile number.";
     if (barbers.some((b) => b.email && !isValidEmail(b.email)))
       x.barberEmail = "Each barber email must be a valid email address.";
-    if (barbers.some((b) => b.age !== "" && b.age !== undefined && !isValidAge(b.age)))
+    if (
+      barbers.some(
+        (b) => b.age !== "" && b.age !== undefined && !isValidAge(b.age),
+      )
+    )
       x.barberAge = "Barber age must be between 18 and 70.";
     if (
       !svc.length ||
@@ -159,16 +211,22 @@ export default function CreateShop() {
           !isValidDuration(s.duration),
       )
     )
-      x.svc = "Add at least one service with a valid name, positive price and duration.";
+      x.svc =
+        "Add at least one service with a valid name, positive price and duration.";
     if (POLICIES.some((p) => !pol[p].trim()))
       x.pol = "Fill in all six shop policies.";
+
     if (hasCoOwner) {
       if (!coOwner.name.trim() || !isValidName(coOwner.name))
-        x.coOwnerName = "Enter co-owner full name (2 to 60 alphabetic characters).";
+        x.coOwnerName =
+          "Enter co-owner full name (2 to 60 alphabetic characters).";
+
       if (!coOwner.email.trim() || !isValidEmail(coOwner.email))
         x.coOwnerEmail = "Enter a valid email address for co-owner.";
+
       if (!coOwner.phone.trim() || !isValidPhone(coOwner.phone))
         x.coOwnerPhone = "Enter a valid 10-digit contact phone for co-owner.";
+
       if (!coOwner.password || coOwner.password.length < 6)
         x.coOwnerPassword = "Password must be at least 6 characters.";
     }
@@ -196,10 +254,12 @@ export default function CreateShop() {
           })),
       ];
       const uploaded = await uploadImages(uploadItems, api);
-      const uploadedShopPhotos = uploaded.slice(0, photos.length).map((image, index) => ({
-        ...image,
-        primary: photos[index].primary,
-      }));
+      const uploadedShopPhotos = uploaded
+        .slice(0, photos.length)
+        .map((image, index) => ({
+          ...image,
+          primary: photos[index].primary,
+        }));
       let barberUploadIndex = photos.length;
       const uploadedBarbers = barbers.map((barber) => {
         if (!barber.photoFile) return { ...barber, photoFile: undefined };
@@ -395,9 +455,7 @@ export default function CreateShop() {
                 </div>
                 <label className="btn-ghost cursor-pointer">
                   <Upload size={16} />
-                  {b.photo
-                      ? "Replace photo"
-                      : "Upload photo"}
+                  {b.photo ? "Replace photo" : "Upload photo"}
                   <input
                     type="file"
                     hidden
@@ -418,7 +476,9 @@ export default function CreateShop() {
                     className="input"
                     placeholder="Full name"
                     value={b.name}
-                    onChange={(e) => updateBarber(b.id, { name: e.target.value })}
+                    onChange={(e) =>
+                      updateBarber(b.id, { name: e.target.value })
+                    }
                   />
                 </div>
                 <div>
@@ -524,23 +584,30 @@ export default function CreateShop() {
               <div>
                 <div className="label mb-1">Working days</div>
                 <div className="flex flex-wrap gap-2">
-                  {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map((day) => (
-                    <label key={day} className="flex items-center gap-1 text-sm cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="accent-[#B39A6A]"
-                        checked={(b.workingDays || []).includes(day)}
-                        onChange={(e) =>
-                          updateBarber(b.id, {
-                            workingDays: e.target.checked
-                              ? [...(b.workingDays || []), day]
-                              : (b.workingDays || []).filter((d) => d !== day),
-                          })
-                        }
-                      />
-                      {day}
-                    </label>
-                  ))}
+                  {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(
+                    (day) => (
+                      <label
+                        key={day}
+                        className="flex items-center gap-1 text-sm cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          className="accent-[#B39A6A]"
+                          checked={(b.workingDays || []).includes(day)}
+                          onChange={(e) =>
+                            updateBarber(b.id, {
+                              workingDays: e.target.checked
+                                ? [...(b.workingDays || []), day]
+                                : (b.workingDays || []).filter(
+                                    (d) => d !== day,
+                                  ),
+                            })
+                          }
+                        />
+                        {day}
+                      </label>
+                    ),
+                  )}
                 </div>
               </div>
               <div>
@@ -705,7 +772,9 @@ export default function CreateShop() {
               Assign Co-Owner to this Shop
             </h3>
             <p className="text-xs text-coffee/70 mt-1 max-w-lg">
-              Delegate day-to-day chair management, customer queues, and staff shifts to a co-owner or branch manager while you retain complete primary owner control.
+              Delegate day-to-day chair management, customer queues, and staff
+              shifts to a co-owner or branch manager while you retain complete
+              primary owner control.
             </p>
           </div>
           <button
@@ -798,7 +867,11 @@ export default function CreateShop() {
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-coffee/60 hover:text-coffee"
                   onClick={() => setShowCoOwnerPassword(!showCoOwnerPassword)}
                 >
-                  {showCoOwnerPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  {showCoOwnerPassword ? (
+                    <EyeOff size={16} />
+                  ) : (
+                    <Eye size={16} />
+                  )}
                 </button>
               </div>
               <Err k="coOwnerPassword" />
@@ -837,7 +910,9 @@ export default function CreateShop() {
               </div>
 
               <label className="label mb-2">
-                Granular Permissions ({Object.values(coOwner.permissions).filter(Boolean).length} granted)
+                Granular Permissions (
+                {Object.values(coOwner.permissions).filter(Boolean).length}{" "}
+                granted)
               </label>
               <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                 {CO_OWNER_PERMISSIONS.map((perm) => {

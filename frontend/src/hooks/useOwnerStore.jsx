@@ -388,8 +388,11 @@ export function OwnerProvider({ children }) {
       }
     };
     loadServerData();
+    const refreshTimer =
+      sessionRole === "customer" ? setInterval(loadServerData, 8000) : null;
     return () => {
       cancelled = true;
+      if (refreshTimer) clearInterval(refreshTimer);
     };
   }, [sessionRole, sessionUser?.id]);
 
@@ -425,13 +428,16 @@ export function OwnerProvider({ children }) {
         if (changed[k] !== undefined) body[k] = changed[k];
       });
       if (Object.keys(body).length) {
-        api
+        return api
           .patch(`/shops/${shopId}`, body, { toastOnError: false })
-          .catch((error) =>
-            console.error("Could not persist shop changes:", error),
-          );
+          .then((response) => response.data)
+          .catch((error) => {
+            console.error("Could not persist shop changes:", error);
+            throw error;
+          });
       }
     }
+    return Promise.resolve(changed);
   };
 
   const up = (key, value) => {
