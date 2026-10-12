@@ -371,9 +371,15 @@ export async function setQueueStatus(req, res) {
   const action = String(req.body?.action || "");
   if (
     action &&
-    !["swap", "requeue", "remove", "closure_wait", "closure_refund"].includes(
-      action,
-    )
+    ![
+      "swap",
+      "requeue",
+      "remove",
+      "closure_wait",
+      "closure_refund",
+      "rejoin",
+      "refund_complete",
+    ].includes(action)
   )
     return res.status(400).json({ message: "Invalid queue action." });
 
