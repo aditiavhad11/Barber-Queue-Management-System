@@ -350,7 +350,7 @@ export function Location() {
   );
 }
 export function Hours() {
-  const { shop, shops, up, updateShop } = useOwner();
+  const { shop, shops, updateShop } = useOwner();
   const x = useDraft(["hours", "availability"]);
   const schedule = scheduleOf({
     availability: x.d.availability,
@@ -398,7 +398,11 @@ export function Hours() {
           <EmergencyClosure
             shop={shop}
             onUpdate={(nextAvail) =>
-              up("shop", (p) => ({ ...p, availability: nextAvail }))
+              updateShop(shop.id, (p) => ({
+                ...p,
+                availability: nextAvail,
+                isOpen: nextAvail.isOpen !== false,
+              }))
             }
           />
         </div>

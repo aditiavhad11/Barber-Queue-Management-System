@@ -604,7 +604,8 @@ export async function updateShop(req, res) {
     nextClosure?.active &&
     nextClosure.startDate <= new Date().toISOString().slice(0, 10) &&
     !(previousClosure?.active && previousClosure.startDate === nextClosure.startDate);
-  const closureEnded = previousClosure?.active && nextClosure?.active === false;
+  const closureEnded =
+    previousClosure?.active && (!nextClosure || nextClosure.active !== true);
   if (b.isOpen !== undefined) {
     nextAvailability = {
       ...nextAvailability,

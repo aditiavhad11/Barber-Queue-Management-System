@@ -44,6 +44,7 @@ export default function EmergencyClosure({ shop, onUpdate }) {
       const currentAvail = shop?.availability || {};
       const nextAvail = {
         ...currentAvail,
+        isOpen: false,
         temporaryClosure: {
           active: true,
           startDate,
@@ -64,10 +65,8 @@ export default function EmergencyClosure({ shop, onUpdate }) {
       const currentAvail = shop?.availability || {};
       const nextAvail = {
         ...currentAvail,
-        temporaryClosure: {
-          ...(currentAvail.temporaryClosure || {}),
-          active: false,
-        },
+        isOpen: true,
+        temporaryClosure: null,
       };
       await onUpdate(nextAvail);
     } finally {
