@@ -4,6 +4,7 @@ import { Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../../hooks/useAuth";
 import { useOwner } from "../../hooks/useOwnerStore";
 import { notifyError, notifySuccess } from "../../utils/toast";
+import { isValidEmail } from "../../utils/validators";
 
 export default function ShopAuth() {
   const nav = useNavigate();
@@ -15,6 +16,14 @@ export default function ShopAuth() {
   const [showPwd, setShowPwd] = useState(false);
   const submit = async (e) => {
     e.preventDefault();
+    if (!isValidEmail(email)) {
+      notifyError("Enter a valid email address.");
+      return;
+    }
+    if (!password) {
+      notifyError("Enter your password.");
+      return;
+    }
     setBusy(true);
     try {
       if (import.meta.env.VITE_API_URL) {

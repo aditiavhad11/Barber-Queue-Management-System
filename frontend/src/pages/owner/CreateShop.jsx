@@ -17,6 +17,16 @@ import { ACCEPTED, MAX_MB, uploadImages } from "../../services/upload";
 import { api } from "../../services/api";
 import { notifyError, notifySuccess } from "../../utils/toast";
 import {
+  isValidShopName,
+  isValidPhone,
+  isValidName,
+  isValidEmail,
+  isValidAge,
+  isValidServiceName,
+  isValidPrice,
+  isValidDuration,
+} from "../../utils/validators";
+import {
   CO_OWNER_PERMISSIONS,
   PERMISSION_PRESETS,
   DEFAULT_PERMISSIONS,
@@ -118,10 +128,10 @@ export default function CreateShop() {
     e.preventDefault();
     if (saving) return;
     const x = {};
-    if (!f.name.trim()) x.name = "Shop name is required.";
+    if (!f.name.trim() || !isValidShopName(f.name))
+      x.name = "Enter a valid shop name (2 to 100 characters).";
     if (!f.address.trim()) x.address = "Address is required.";
-    const contactDigits = f.contact.replace(/\D/g, "");
-    if (!contactDigits || contactDigits.length !== 10)
+    if (!isValidPhone(f.contact))
       x.contact = "Enter a valid 10-digit Indian mobile number.";
     if (!loc?.confirmed) x.loc = "Find and confirm the exact shop location.";
     if (!photos.length) x.photos = "At least one shop photo is required.";
@@ -129,23 +139,36 @@ export default function CreateShop() {
       const he = scheduleError(schedule);
       if (he) x.hours = he;
     }
-    if (!barbers.length || barbers.some((b) => !b.name.trim()))
-      x.barbers = "Add a name for every barber.";
+    if (!barbers.length || barbers.some((b) => !b.name.trim() || !isValidName(b.name)))
+      x.barbers = "Add a valid name (2 to 60 alphabetic characters) for every barber.";
     if (barbers.some((b) => !b.services.length))
       x.barberServices = "Assign at least one service to every barber.";
+    if (barbers.some((b) => b.phone && !isValidPhone(b.phone)))
+      x.barberPhone = "Each barber phone must be a valid 10-digit mobile number.";
+    if (barbers.some((b) => b.email && !isValidEmail(b.email)))
+      x.barberEmail = "Each barber email must be a valid email address.";
+    if (barbers.some((b) => b.age !== "" && b.age !== undefined && !isValidAge(b.age)))
+      x.barberAge = "Barber age must be between 18 and 70.";
     if (
       !svc.length ||
-      svc.some((s) => !s.name.trim() || !(+s.price > 0) || !(+s.duration > 0))
+      svc.some(
+        (s) =>
+          !s.name.trim() ||
+          !isValidServiceName(s.name) ||
+          !isValidPrice(s.price) ||
+          !isValidDuration(s.duration),
+      )
     )
-      x.svc = "Add at least one service with a name, price and duration.";
+      x.svc = "Add at least one service with a valid name, positive price and duration.";
     if (POLICIES.some((p) => !pol[p].trim()))
       x.pol = "Fill in all six shop policies.";
     if (hasCoOwner) {
-      if (!coOwner.name.trim()) x.coOwnerName = "Enter co-owner full name.";
-      if (!coOwner.email.trim() || !coOwner.email.includes("@"))
+      if (!coOwner.name.trim() || !isValidName(coOwner.name))
+        x.coOwnerName = "Enter co-owner full name (2 to 60 alphabetic characters).";
+      if (!coOwner.email.trim() || !isValidEmail(coOwner.email))
         x.coOwnerEmail = "Enter a valid email address for co-owner.";
-      if (!coOwner.phone.trim())
-        x.coOwnerPhone = "Enter contact phone for co-owner.";
+      if (!coOwner.phone.trim() || !isValidPhone(coOwner.phone))
+        x.coOwnerPhone = "Enter a valid 10-digit contact phone for co-owner.";
       if (!coOwner.password || coOwner.password.length < 6)
         x.coOwnerPassword = "Password must be at least 6 characters.";
     }

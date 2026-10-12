@@ -25,6 +25,7 @@ import WeeklyHours from "../../components/owner/WeeklyHours";
 import AnnualSchedule from "../../components/owner/AnnualSchedule";
 import { to12Hour, from12Hour } from "../../utils/time";
 import { notifyError } from "../../utils/toast";
+import { isValidShopName, isValidPhone } from "../../utils/validators";
 const SaveBar = ({ dirty, onSave, onCancel, saved }) => (
   <div className="flex items-center gap-3 mt-6">
     <button className="btn" disabled={!dirty} onClick={onSave}>
@@ -254,7 +255,21 @@ export function Details() {
         </label>
         <SaveBar
           dirty={x.dirty}
-          onSave={x.save}
+          onSave={() => {
+            if (!x.d.name?.trim() || !isValidShopName(x.d.name)) {
+              notifyError("Enter a valid shop name (2 to 100 characters).");
+              return;
+            }
+            if (!x.d.contact?.trim() || !isValidPhone(x.d.contact)) {
+              notifyError("Enter a valid 10-digit Indian contact number.");
+              return;
+            }
+            if (!x.d.address?.trim()) {
+              notifyError("Address is required.");
+              return;
+            }
+            x.save();
+          }}
           onCancel={x.cancel}
           saved={x.saved}
         />

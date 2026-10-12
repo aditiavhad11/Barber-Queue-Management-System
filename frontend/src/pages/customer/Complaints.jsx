@@ -5,6 +5,10 @@ import { api } from "../../services/api";
 import { Empty } from "../../components/common/ui";
 import { relativeTime } from "../../utils/relativeTime";
 import { notifyError, notifySuccess } from "../../utils/toast";
+
+// Subject: 3-190 chars, word chars + common punctuation (mirrors backend regex)
+const SUBJECT_REGEX = /^[\w\s.,?!'"()\-]{3,190}$/;
+
 export default function Complaints() {
   const { shops } = useOwner();
   const [customerComplaints, setCustomerComplaints] = useState([]);
@@ -39,7 +43,18 @@ export default function Complaints() {
   }, [presetShopId]);
   const submit = async (e) => {
     e.preventDefault();
-    if (!f.shopId || !f.subject.trim() || !f.description.trim()) return;
+    if (!f.shopId) {
+      notifyError("Select a shop.");
+      return;
+    }
+    if (!f.subject.trim() || !SUBJECT_REGEX.test(f.subject.trim())) {
+      notifyError("Subject must be 3 to 190 characters (letters, numbers and basic punctuation only).");
+      return;
+    }
+    if (f.description.trim().length < 5) {
+      notifyError("Description must be at least 5 characters long.");
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -52,14 +67,6 @@ export default function Complaints() {
     } finally {
       setSaving(false);
     }
-    if (!f.shopId || !f.subject.trim() || !f.description.trim()) {
-      notifyError("Select a shop and fill in the subject and description.");
-      return;
-    }
-    addComplaint(f);
-    setF({ shopId: "", issueType: "Service", subject: "", description: "" });
-    setOpen(false);
-    notifySuccess("Your complaint has been submitted.");
   };
   return (
     <div className="fade max-w-3xl">

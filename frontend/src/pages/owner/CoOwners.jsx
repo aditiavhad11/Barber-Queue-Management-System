@@ -14,6 +14,11 @@ import { useOwner } from "../../hooks/useOwnerStore";
 import { PageHead, StatusBadge, Empty, Modal } from "../../components/common/ui";
 import { notifyError, notifySuccess } from "../../utils/toast";
 import {
+  isValidName,
+  isValidEmail,
+  isValidPhone,
+} from "../../utils/validators";
+import {
   CO_OWNER_PERMISSIONS,
   PERMISSION_PRESETS,
   DEFAULT_PERMISSIONS,
@@ -92,20 +97,24 @@ export default function CoOwners() {
     e.preventDefault();
     if (!shop) return;
 
-    if (!form.name.trim()) {
-      notifyError("Please enter the co-owner's full name.");
+    if (!form.name.trim() || !isValidName(form.name)) {
+      notifyError("Please enter a valid full name (2 to 60 alphabetic characters).");
       return;
     }
-    if (!form.email.trim() || !form.email.includes("@")) {
+    if (!isValidEmail(form.email)) {
       notifyError("Please enter a valid email address.");
       return;
     }
-    if (!form.phone.trim()) {
-      notifyError("Please enter a contact phone number.");
+    if (!isValidPhone(form.phone)) {
+      notifyError("Please enter a valid 10-digit mobile number.");
       return;
     }
     if (!editingCoOwner && (!form.password || form.password.length < 6)) {
       notifyError("Password must be at least 6 characters for login access.");
+      return;
+    }
+    if (editingCoOwner && form.password && form.password.length < 6) {
+      notifyError("Password must be at least 6 characters.");
       return;
     }
 

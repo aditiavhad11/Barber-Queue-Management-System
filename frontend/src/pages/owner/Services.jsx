@@ -11,6 +11,11 @@ import {
 import { activeOf } from "../../utils/ownerEta";
 import { api } from "../../services/api";
 import { notifySuccess } from "../../utils/toast";
+import {
+  isValidServiceName,
+  isValidPrice,
+  isValidDuration,
+} from "../../utils/validators";
 export default function Services() {
   const { services, queues, barbers, up, addServiceToShop, currentShopId } =
     useOwner();
@@ -87,10 +92,20 @@ export default function Services() {
   };
   const save = async () => {
     const s = edit;
-    if (!s.name.trim() || !(+s.price > 0) || !(+s.duration > 0))
+    if (!s.name.trim() || !isValidServiceName(s.name))
       return setEdit({
         ...s,
-        err: "Enter a name, positive price and positive duration.",
+        err: "Enter a valid service name (2 to 80 characters).",
+      });
+    if (!isValidPrice(s.price))
+      return setEdit({
+        ...s,
+        err: "Price must be a valid positive amount.",
+      });
+    if (!isValidDuration(s.duration))
+      return setEdit({
+        ...s,
+        err: "Duration must be a positive integer in minutes.",
       });
     try {
       if (s.id)

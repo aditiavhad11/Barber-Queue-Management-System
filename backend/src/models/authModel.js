@@ -3,6 +3,12 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { pool } from "../config/db.js";
 import { sendOtpEmail, emailConfigured } from "../config/mail.js";
+import {
+  isValidEmail,
+  isValidName,
+  isValidOtp,
+  PATTERNS,
+} from "../utils/validators.js";
 
 const sign = (user) =>
   jwt.sign(
@@ -22,8 +28,7 @@ const cleanEmail = (email) =>
   String(email || "")
     .trim()
     .toLowerCase();
-const EMAIL_REGEX =
-  /^[A-Z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$/i;
+const EMAIL_REGEX = PATTERNS.EMAIL;
 const otp = () => String(crypto.randomInt(100000, 1000000));
 
 export async function requestOtp({
@@ -34,7 +39,11 @@ export async function requestOtp({
   intent = "signin",
 }) {
   const clean = cleanEmail(email);
-  if (!EMAIL_REGEX.test(clean)) throw new Error("Enter a valid email address.");
+  if (!isValidEmail(clean)) throw new Error("Enter a valid email address.");
+
+  if (name && !isValidName(name)) {
+    throw new Error("Enter a valid name (2 to 60 alphabetic characters).");
+  }
 
   if (!["customer", "owner", "admin"].includes(role)) {
     throw new Error("Invalid account role.");
@@ -125,7 +134,11 @@ export async function requestOtp({
 
 export async function verifyOtp({ email, role, name, code, password }) {
   const clean = cleanEmail(email);
-  if (!EMAIL_REGEX.test(clean)) throw new Error("Enter a valid email address.");
+  if (!isValidEmail(clean)) throw new Error("Enter a valid email address.");
+
+  if (!isValidOtp(code)) {
+    throw new Error("Enter a valid 6-digit verification code.");
+  }
 
   const [rows] = await pool.query(
     "SELECT * FROM otp_codes WHERE email=? AND role=? ORDER BY id DESC LIMIT 1",
@@ -250,6 +263,9 @@ export async function passwordLogin({ email, password, role }) {
 
 export async function shopLogin({ email, password }) {
   const clean = cleanEmail(email);
+  if (!isValidEmail(clean)) {
+    throw new Error("Enter a valid email address.");
+  }
   const [rows] = await pool.query(
     "SELECT id,name,owner_id,login_email,login_password_hash,status FROM shops WHERE login_email=? LIMIT 1",
     [clean],

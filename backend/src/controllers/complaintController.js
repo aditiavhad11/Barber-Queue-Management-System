@@ -36,7 +36,11 @@ export async function createComplaint(req, res) {
   const description = String(req.body?.description || "").trim().slice(0, 5000);
   if (!shopId || !subject || !description)
     return res.status(400).json({ message: "Shop, subject and description are required." });
-  if (!["staff", "owner"].includes(targetType))
+  if (!/^[\w\s.,?!'"()\-]{3,190}$/.test(subject))
+    return res.status(400).json({ message: "Subject must be between 3 and 190 characters." });
+  if (description.length < 5)
+    return res.status(400).json({ message: "Description must be at least 5 characters long." });
+  if (!/^(staff|owner)$/.test(targetType))
     return res.status(400).json({ message: "Choose whether the complaint is about staff or the shop owner." });
   if ((targetType === "staff") !== Boolean(targetBarberId))
     return res.status(400).json({ message: "Choose a staff member for staff complaints only." });

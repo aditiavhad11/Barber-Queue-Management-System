@@ -1,15 +1,16 @@
 import crypto from "node:crypto";
 import { pool } from "../config/db.js";
+import { isValidRating } from "../utils/validators.js";
 
 // A review belongs to a COMPLETED queue entry (an accepted booking) of the signed-in customer.
 export async function createReview(req, res) {
   const { shopId, queueId } = req.body || {};
-  const rating = Number(req.body?.rating);
+  const rating = req.body?.rating;
   const text = String(req.body?.text || "")
     .trim()
     .slice(0, 2000);
 
-  if (!Number.isInteger(rating) || rating < 1 || rating > 5)
+  if (!isValidRating(rating))
     return res.status(400).json({ message: "Choose a rating from 1 to 5." });
 
   const [rows] = await pool.query(

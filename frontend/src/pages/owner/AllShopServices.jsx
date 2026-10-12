@@ -3,6 +3,11 @@ import { Plus, Store, Layers3 } from "lucide-react";
 import { useOwner } from "../../hooks/useOwnerStore";
 import { PageHead, Empty, Modal, Badge } from "../../components/common/ui";
 import { notifyError, notifySuccess } from "../../utils/toast";
+import {
+  isValidServiceName,
+  isValidPrice,
+  isValidDuration,
+} from "../../utils/validators";
 
 export default function AllShopServices() {
   const { shops, owner, addServiceToAllShops } = useOwner();
@@ -36,16 +41,16 @@ export default function AllShopServices() {
 
   const save = async () => {
     const name = form.name.trim();
-    const price = Number(form.price);
-    const duration = Number(form.duration);
-    if (
-      !name ||
-      !Number.isFinite(price) ||
-      price <= 0 ||
-      !Number.isFinite(duration) ||
-      duration <= 0
-    ) {
-      notifyError("Enter a service name, positive price and positive duration.");
+    if (!name || !isValidServiceName(name)) {
+      notifyError("Enter a valid service name (2 to 80 characters).");
+      return;
+    }
+    if (!isValidPrice(form.price)) {
+      notifyError("Price must be a valid positive amount.");
+      return;
+    }
+    if (!isValidDuration(form.duration)) {
+      notifyError("Duration must be a positive integer in minutes.");
       return;
     }
     const targets = visibleShops;
