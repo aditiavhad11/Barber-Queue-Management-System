@@ -606,6 +606,7 @@ export async function updateShop(req, res) {
     !(previousClosure?.active && previousClosure.startDate === nextClosure.startDate);
   const closureEnded =
     previousClosure?.active && (!nextClosure || nextClosure.active !== true);
+  let closureBookingIds = [];
   if (b.isOpen !== undefined) {
     nextAvailability = {
       ...nextAvailability,
@@ -708,6 +709,20 @@ export async function updateShop(req, res) {
     }
 
     if (closureStarted) {
+      console.info("[emergency-closure] marking active bookings", {
+        shopId,
+        startDate: nextClosure.startDate,
+        endDate: nextClosure.endDate || null,
+      });
+      const [affectedBookings] = await connection.query(
+        `SELECT id, customer_id, token
+         FROM payment_bookings
+         WHERE shop_id=? AND status='accepted'
+           AND queue_status IN ('Waiting','Your Turn','In Service')
+         FOR UPDATE`,
+        [shopId],
+      );
+      closureBookingIds = affectedBookings.map((booking) => booking.id);
       await connection.query(
         `UPDATE payment_bookings
          SET queue_status='Emergency Closed', closure_choice=NULL
@@ -715,6 +730,40 @@ export async function updateShop(req, res) {
            AND queue_status IN ('Waiting','Your Turn','In Service')`,
         [shopId],
       );
+      if (affectedBookings.length) {
+        const notificationValues = affectedBookings.flatMap((booking) => [
+          booking.customer_id,
+          shopId,
+          "alert",
+          `Your turn (token #${booking.token}) was cancelled because the shop closed due to an emergency. You can wait for reopening or request a refund from your queue.`,
+          booking.id,
+        ]);
+        await connection.query(
+          `INSERT INTO notifications
+             (id, user_id, shop_id, tone, text, ref_id)
+           VALUES ${affectedBookings.map(() => "(UUID(), ?, ?, ?, ?, ?)").join(", ")}`,
+          notificationValues,
+        );
+      }
+      await connection.query(
+        `INSERT INTO audit_logs
+           (actor_id, action, entity_type, entity_id, metadata_json)
+         VALUES (?, 'emergency_closure_started', 'shop', ?, ?)`,
+        [
+          req.user.sub,
+          shopId,
+          JSON.stringify({
+            startDate: nextClosure.startDate,
+            endDate: nextClosure.endDate || null,
+            reason: nextClosure.reason || "",
+            bookingsCancelled: affectedBookings.length,
+          }),
+        ],
+      );
+      console.info("[emergency-closure] bookings marked and customers notified", {
+        shopId,
+        bookingsCancelled: affectedBookings.length,
+      });
     }
 
     await connection.commit();
@@ -729,13 +778,28 @@ export async function updateShop(req, res) {
     shopId,
   ]);
   if (closureStarted) {
-    await enqueueEmergencyClosureNotifications(shopId, nextClosure).catch(
-      (error) =>
-        console.error(
-          "Could not enqueue emergency closure notifications:",
-          error.message,
-        ),
-    );
+    try {
+      if (closureBookingIds.length) {
+        const job = await enqueueEmergencyClosureNotifications(shopId, {
+          ...nextClosure,
+          bookingIds: closureBookingIds,
+        });
+        console.info("[emergency-closure] email job queued", {
+          shopId,
+          jobId: job.id,
+          bookingsQueued: closureBookingIds.length,
+        });
+      } else {
+        console.info("[emergency-closure] no active bookings required email", {
+          shopId,
+        });
+      }
+    } catch (error) {
+      console.error(
+        "[emergency-closure] could not queue asynchronous emails:",
+        error.message,
+      );
+    }
   }
   res.json(await hydrateShop(rows[0]));
 }

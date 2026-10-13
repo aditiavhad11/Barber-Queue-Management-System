@@ -288,10 +288,12 @@ export default function MyQueue() {
 
         {entry.status === "Emergency Closed" && (
           <div className="border border-rose/30 bg-rose/10 p-5 mt-8">
-            <p className="font-semibold text-rose">Shop closed unexpectedly</p>
+            <p className="font-semibold text-rose">
+              Your turn was cancelled due to an emergency closure
+            </p>
             <p className="text-sm mt-1">
-              Your ticket is paused. Choose whether to wait for reopening or
-              request a refund.
+              The active queue is now empty. Choose whether to wait for
+              reopening or request a refund for this booking.
             </p>
             {!entry.closureChoice && (
               <div className="flex flex-wrap gap-3 mt-4">
@@ -314,7 +316,14 @@ export default function MyQueue() {
               </div>
             )}
             {entry.closureChoice === "wait" && (
-              <p className="text-sm mt-4">Your ticket will resume when the shop reopens.</p>
+              <p className="text-sm mt-4">
+                You chose to wait. Your ticket will resume when the shop reopens.
+              </p>
+            )}
+            {entry.closureChoice === "refund" && (
+              <p className="text-sm mt-4">
+                Your refund request was sent to the shop.
+              </p>
             )}
           </div>
         )}
