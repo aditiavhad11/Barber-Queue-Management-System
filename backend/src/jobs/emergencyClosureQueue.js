@@ -56,29 +56,6 @@ export const enqueueEmergencyClosureNotifications = (shopId, closure) => {
   );
 };
 
-async function insertNotifications(bookings, shopId) {
-  if (bookings.length === 0) return;
-
-  const placeholders = bookings.map(() => "(UUID(), ?, ?, ?, ?, ?)").join(", ");
-
-  const values = bookings.flatMap((booking) => [
-    booking.customer_id,
-    shopId,
-    "alert",
-    `${booking.shop_name} closed unexpectedly. Choose whether to wait for reopening or request a refund for token #${booking.token}.`,
-    booking.id,
-  ]);
-
-  // One bulk INSERT instead of one INSERT per booking.
-  // Duplicate prevention is enforced by the database unique index below.
-  await pool.query(
-    `INSERT IGNORE INTO notifications
-       (id, user_id, shop_id, tone, text, ref_id)
-     VALUES ${placeholders}`,
-    values,
-  );
-}
-
 async function sendEmailsInBatches(bookings, closure) {
   for (let i = 0; i < bookings.length; i += EMAIL_BATCH_SIZE) {
     const batch = bookings
@@ -122,6 +99,27 @@ export const emergencyClosureWorker = new Worker(
   async (job) => {
     const { shopId, closure } = job.data;
 
+
+    console.info("[emergency-closure] email worker started", {
+      jobId: job.id,
+      shopId,
+    });
+
+    const bookingIds = Array.isArray(closure.bookingIds)
+      ? closure.bookingIds.filter(Boolean)
+      : [];
+
+    // The closure transaction records the exact affected bookings. Never fall
+    // back to all emergency-closed bookings: that can send an old closure's
+    // email to a customer from a later closure.
+    if (!bookingIds.length) {
+      console.info("[emergency-closure] no bookings recorded for job", {
+        jobId: job.id,
+        shopId,
+      });
+      return { shopId, bookingsProcessed: 0, emailsAttempted: 0 };
+    }
+
     const [bookings] = await pool.query(
       `SELECT
          b.id,
@@ -137,18 +135,24 @@ export const emergencyClosureWorker = new Worker(
        JOIN barbers bar ON bar.id = b.barber_id
        WHERE b.shop_id = ?
          AND b.status = 'accepted'
-         AND b.queue_status = 'Emergency Closed'`,
-      [shopId],
+         AND (b.queue_status = 'Emergency Closed'
+              OR (b.queue_status = 'Cancelled' AND b.closure_choice = 'refund'))
+         AND b.id IN (${bookingIds.map(() => "?").join(",")})`,
+      [shopId, ...bookingIds],
     );
 
     if (bookings.length === 0) return;
 
-    // Phase 1: persist all in-app notifications in one DB operation.
-    await insertNotifications(bookings, shopId);
+    // In-app notifications are written transactionally when the closure starts.
+    // This job is intentionally responsible only for asynchronous email delivery.
 
-    // Phase 2: send emails with bounded concurrency.
     await sendEmailsInBatches(bookings, closure);
 
+    console.info("[emergency-closure] email worker completed", {
+      jobId: job.id,
+      shopId,
+      bookingsProcessed: bookings.length,
+    });
     return {
       shopId,
       bookingsProcessed: bookings.length,

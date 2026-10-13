@@ -1083,7 +1083,9 @@ export function OwnerProvider({ children }) {
             ? {
                 ...e,
                 status,
-                ...(b.closureChoice ? { closureChoice: b.closureChoice } : {}),
+                ...(oldEntry.closureChoice
+                  ? { closureChoice: oldEntry.closureChoice }
+                  : {}),
                 ...extra,
                 ...(status === "In Service"
                   ? { serviceStartedAt: new Date().toISOString() }
@@ -1299,7 +1301,9 @@ export function OwnerProvider({ children }) {
         barber: barber?.name || "Barber",
         services,
         status: entry.status,
-        ...(b.closureChoice ? { closureChoice: b.closureChoice } : {}),
+        ...(entry.closureChoice
+          ? { closureChoice: entry.closureChoice }
+          : {}),
         message: String(message || "").trim(),
       });
     } catch (error) {
@@ -1659,6 +1663,9 @@ export function OwnerProvider({ children }) {
               ...(b.queuePosition
                 ? { queuePosition: Number(b.queuePosition) }
                 : {}),
+              ...(b.closureChoice
+                ? { closureChoice: b.closureChoice }
+                : {}),
               skipCount: b.skipCount || 0,
               ...(b.skippedAt ? { skippedAt: b.skippedAt } : {}),
               ...(b.completedAt ? { completedAt: b.completedAt } : {}),
@@ -1932,6 +1939,7 @@ export function OwnerProvider({ children }) {
         Skipped: 4,
         "No Show": 5,
         Cancelled: 6,
+        "Emergency Closed": 6,
       };
       return (
         (rank[a.entry.status] ?? 9) - (rank[b.entry.status] ?? 9) ||

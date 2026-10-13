@@ -580,6 +580,16 @@ export async function setQueueStatus(req, res) {
     return res.json({ booking: fresh, action });
   }
 
+  // Emergency closure is a terminal decision point until the customer chooses
+  // to wait or request a refund. Do not allow a stale owner action (for
+  // example, an in-flight "Complete" click) to overwrite it.
+  if (current === "Emergency Closed") {
+    return res.status(409).json({
+      message:
+        "This booking is paused because the shop closed due to an emergency.",
+    });
+  }
+
   if (["Completed", "Cancelled", "No Show"].includes(current))
     return res.json({ booking, unchanged: true });
 
