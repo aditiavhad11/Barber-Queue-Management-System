@@ -76,6 +76,8 @@ async function sendEmailsInBatches(bookings, closure) {
             `/app/queue?closure=${encodeURIComponent(booking.id)}&choice=refund`,
           ),
           reason: closure.reason,
+          startAt: closure.startAt,
+          endAt: closure.endAt,
         }),
       ),
     );
