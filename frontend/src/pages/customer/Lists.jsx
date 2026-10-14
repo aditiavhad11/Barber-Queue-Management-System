@@ -39,7 +39,12 @@ export function Bookings() {
         : p.status === "Cancelled" || p.status === "Refunded"
           ? "Cancelled"
           : p.status;
-    return { ...p, status: displayStatus };
+    return {
+      ...p,
+      status: displayStatus === "Successful" && p.status === "Scheduled"
+        ? "Scheduled"
+        : displayStatus,
+    };
   });
   const live = customerQueue
     ? [

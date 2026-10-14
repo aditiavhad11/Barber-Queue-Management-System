@@ -41,6 +41,7 @@ import {
   Policies,
 } from "./pages/owner/ShopPages";
 import Queue from "./pages/owner/Queue";
+import Prebookings from "./pages/owner/Prebookings";
 import Barbers from "./pages/owner/Barbers";
 import Services from "./pages/owner/Services";
 import AllShopServices from "./pages/owner/AllShopServices";
@@ -174,6 +175,7 @@ export default function App() {
             <Route path="shop/hours" element={<Hours />} />
             <Route path="shop/policies" element={<Policies />} />
             <Route path="queue" element={<Queue />} />
+            <Route path="prebookings" element={<Prebookings />} />
             <Route path="barbers" element={<Barbers />} />
             <Route path="services" element={<Services />} />
             <Route path="all-services" element={<AllShopServices />} />
@@ -204,6 +206,7 @@ export default function App() {
             <Route path="shop/hours" element={<Hours />} />
             <Route path="shop/policies" element={<Policies />} />
             <Route path="queue" element={<Queue />} />
+            <Route path="prebookings" element={<Prebookings />} />
             <Route path="barbers" element={<Barbers />} />
             <Route path="services" element={<Services />} />
             <Route path="customers" element={<Customers />} />
