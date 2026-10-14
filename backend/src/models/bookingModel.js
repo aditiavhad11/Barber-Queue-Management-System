@@ -38,12 +38,24 @@ export async function hydrateBookings(rows) {
     ...new Set(rows.flatMap((row) => parse(row.service_ids_json, []))),
   ];
   let byId = new Map();
+  let adjustmentsByBooking = new Map();
   if (ids.length) {
     const [services] = await pool.query(
       `SELECT id,name,price,duration_minutes FROM services WHERE id IN (${ids.map(() => "?").join(",")})`,
       ids,
     );
     byId = new Map(services.map((x) => [x.id, x]));
+  }
+  try {
+    const [adjustments] = await pool.query(
+      `SELECT booking_id,SUM(amount_delta) AS amount_delta
+       FROM booking_service_edits WHERE status='applied' AND booking_id IN (${rows.map(() => "?").join(",")})
+       GROUP BY booking_id`,
+      rows.map((row) => row.id),
+    );
+    adjustmentsByBooking = new Map(adjustments.map((row) => [row.booking_id, Number(row.amount_delta || 0)]));
+  } catch (error) {
+    if (error.code !== "ER_NO_SUCH_TABLE") throw error;
   }
   return rows.map((row) => {
     const serviceIds = parse(row.service_ids_json, []);
@@ -67,6 +79,10 @@ export async function hydrateBookings(rows) {
           duration: Number(x.duration_minutes),
         })),
       amount: Number(row.amount),
+      originalAmount: Number(row.original_amount ?? row.amount),
+      discountAmount: Number(row.discount_amount || 0),
+      schemeId: row.scheme_id || null,
+      totalAmount: Number(row.amount) + (adjustmentsByBooking.get(row.id) || 0),
       durationMinutes: Number(row.duration_minutes),
       beneficiary: parse(row.beneficiary_json, {}),
       status: row.status,

@@ -45,6 +45,8 @@ export default function Booking() {
 
   const [quote, setQuote] = useState(null);
   const [quoteBusy, setQuoteBusy] = useState(false);
+  const [promoCode, setPromoCode] = useState("");
+  const [appliedPromoCode, setAppliedPromoCode] = useState("");
   const [submitBusy, setSubmitBusy] = useState(false);
   const [paymentError, setPaymentError] = useState("");
   const [payerName, setPayerName] = useState("");
@@ -95,7 +97,7 @@ export default function Booking() {
           email: friend.email,
         };
 
-  const loadQuote = async () => {
+  const loadQuote = async (code = appliedPromoCode) => {
     if (!shop || !barber || !sids.length || blockedSelection || quoteBusy)
       return;
     setQuoteBusy(true);
@@ -106,6 +108,7 @@ export default function Booking() {
         serviceIds: sids,
         barberId: barber.id,
         bookingDate,
+        promoCode: code,
         beneficiary: beneficiaryBody(),
       });
       setQuote(data);
@@ -165,6 +168,7 @@ export default function Booking() {
     friend.email,
     bookingDate,
     blockedSelection,
+    appliedPromoCode,
   ]);
 
   const toggleService = (sid) => {
@@ -586,6 +590,11 @@ export default function Booking() {
 
       {step === 4 && (
         <div className="border border-khaki bg-card p-6 md:p-8">
+          <div className="border border-khaki p-4 mb-5 space-y-2">
+            <label className="block"><span className="label">Promo code (optional)</span><input className="input mt-1 uppercase" maxLength={32} value={promoCode} onChange={(e) => setPromoCode(e.target.value.toUpperCase())} placeholder="Enter offer code" /></label>
+            <div className="flex flex-wrap items-center gap-3"><button type="button" className="btn-ghost" disabled={quoteBusy} onClick={() => { const code = promoCode.trim().toUpperCase(); setAppliedPromoCode(code); setQuote(null); if (code === appliedPromoCode) loadQuote(code); }}>Apply code</button><p className="text-xs text-soft">Eligible offers without a promo code are checked automatically.</p></div>
+            {quote?.scheme && <p className="text-sm text-olive" role="status">{quote.scheme.title} is confirmed for this booking.</p>}
+          </div>
           {quoteBusy ? (
             <div className="py-12 text-center text-soft">
               <span className="pay-spinner pay-spinner-lg inline-block" />
@@ -602,6 +611,7 @@ export default function Booking() {
             </div>
           ) : quote ? (
             <div className="space-y-6">
+              {Number(quote.discountAmount) > 0 && <div className="border border-olive/30 bg-olive/10 p-4 space-y-1 text-sm"><div className="flex justify-between"><span>Original price</span><span>₹{Number(quote.originalAmount).toFixed(2)}</span></div><div className="flex justify-between"><span>{quote.scheme?.title || "Offer discount"}</span><span>−₹{Number(quote.discountAmount).toFixed(2)}</span></div>{Number(quote.amount) > Number(quote.originalAmount) - Number(quote.discountAmount) && <div className="flex justify-between"><span>UPI payment reference adjustment</span><span>+₹{(Number(quote.amount) - Number(quote.originalAmount) + Number(quote.discountAmount)).toFixed(2)}</span></div>}<div className="flex justify-between border-t border-olive/20 pt-2 font-medium"><span>Final payable amount</span><span>₹{Number(quote.amount).toFixed(2)}</span></div></div>}
               <div>
                 <p className="label">UPI payment</p>
                 <h2 className="font-serif text-5xl mt-2">
@@ -640,7 +650,7 @@ export default function Booking() {
                 type="button"
                 className="btn w-full !py-4 text-lg"
                 disabled={
-                  submitBusy || (forWhom === "self" && !!activeSelfBooking)
+                  submitBusy || promoCode.trim().toUpperCase() !== appliedPromoCode || (forWhom === "self" && !!activeSelfBooking)
                 }
                 onClick={submitPayment}
               >
@@ -650,7 +660,7 @@ export default function Booking() {
                     Submitting...
                   </>
                 ) : (
-                  "I have paid"
+                  promoCode.trim().toUpperCase() !== appliedPromoCode ? "Apply the code to continue" : "I have paid"
                 )}
               </button>
 

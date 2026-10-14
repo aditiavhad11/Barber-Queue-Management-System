@@ -161,6 +161,34 @@ CREATE TABLE IF NOT EXISTS payments (
   INDEX idx_payment_shop (shop_id, status)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS schemes (
+  id CHAR(36) PRIMARY KEY,
+  shop_id CHAR(36) NOT NULL,
+  title VARCHAR(120) NOT NULL,
+  description TEXT NOT NULL,
+  image_url TEXT NULL,
+  terms TEXT NULL,
+  discount_type ENUM('percentage','fixed') NOT NULL,
+  discount_value DECIMAL(10,2) NOT NULL,
+  starts_at DATETIME NULL,
+  ends_at DATETIME NULL,
+  all_services TINYINT(1) NOT NULL DEFAULT 1,
+  service_ids_json JSON NOT NULL,
+  all_barbers TINYINT(1) NOT NULL DEFAULT 1,
+  barber_ids_json JSON NOT NULL,
+  minimum_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+  maximum_discount DECIMAL(10,2) NULL,
+  usage_limit INT UNSIGNED NULL,
+  per_customer_limit INT UNSIGNED NULL,
+  promo_code VARCHAR(32) NULL,
+  status ENUM('draft','active','paused') NOT NULL DEFAULT 'draft',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (shop_id) REFERENCES shops(id) ON DELETE CASCADE,
+  UNIQUE KEY uq_scheme_shop_code (shop_id,promo_code),
+  INDEX idx_scheme_shop_status (shop_id,status,starts_at,ends_at)
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS refunds (
   id CHAR(36) PRIMARY KEY,
   payment_id CHAR(36) NOT NULL,
@@ -268,6 +296,9 @@ CREATE TABLE IF NOT EXISTS payment_bookings (
   booking_date DATE NULL,
   service_ids_json JSON NOT NULL,
   amount DECIMAL(10,2) NOT NULL,
+  original_amount DECIMAL(10,2) NULL,
+  discount_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+  scheme_id CHAR(36) NULL,
   duration_minutes INT UNSIGNED NOT NULL,
   beneficiary_json JSON NOT NULL,
   beneficiary_key VARCHAR(190) NOT NULL,
@@ -297,9 +328,44 @@ CREATE TABLE IF NOT EXISTS payment_bookings (
   FOREIGN KEY (shop_id) REFERENCES shops(id) ON DELETE CASCADE,
   FOREIGN KEY (barber_id) REFERENCES barbers(id) ON DELETE CASCADE,
   FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE RESTRICT,
+  FOREIGN KEY (scheme_id) REFERENCES schemes(id) ON DELETE SET NULL,
   INDEX idx_booking_shop_status (shop_id, status),
   INDEX idx_booking_customer (customer_id, status),
-  INDEX idx_booking_request (customer_id, request_hash, status)
+  INDEX idx_booking_request (customer_id, request_hash, status),
+  INDEX idx_booking_scheme_status (scheme_id,status)
+) ENGINE=InnoDB;
+
+-- Service edit payments/refunds are kept separate from the original booking payment.
+CREATE TABLE IF NOT EXISTS booking_service_edits (
+  id CHAR(36) PRIMARY KEY,
+  request_key CHAR(36) NOT NULL,
+  booking_id CHAR(36) NOT NULL,
+  customer_id CHAR(36) NOT NULL,
+  shop_id CHAR(36) NOT NULL,
+  barber_id CHAR(36) NOT NULL,
+  old_service_ids_json JSON NOT NULL,
+  requested_service_ids_json JSON NOT NULL,
+  amount_delta DECIMAL(10,2) NOT NULL DEFAULT 0,
+  proposed_total DECIMAL(10,2) NOT NULL,
+  proposed_duration INT UNSIGNED NOT NULL,
+  payment_reference VARCHAR(120) NULL,
+  payer_name VARCHAR(120) NULL,
+  status ENUM('payment_review','refund_review','applied','rejected') NOT NULL,
+  payment_status ENUM('not_required','submitted','verified','declined') NOT NULL DEFAULT 'not_required',
+  refund_status ENUM('not_required','requested','shop_confirmed') NOT NULL DEFAULT 'not_required',
+  resolution_note VARCHAR(255) NULL,
+  resolved_by CHAR(64) NULL,
+  resolved_by_role ENUM('owner','shop','co_owner') NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resolved_at DATETIME NULL,
+  UNIQUE KEY uq_booking_service_edit_request (customer_id, request_key),
+  UNIQUE KEY uq_booking_service_edit_payment_ref (payment_reference),
+  INDEX idx_booking_service_edit_pending (shop_id, status, created_at),
+  INDEX idx_booking_service_edit_booking (booking_id, created_at),
+  FOREIGN KEY (booking_id) REFERENCES payment_bookings(id) ON DELETE CASCADE,
+  FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (shop_id) REFERENCES shops(id) ON DELETE CASCADE,
+  FOREIGN KEY (barber_id) REFERENCES barbers(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS service_unavailability (

@@ -7,6 +7,369 @@ import {
   rupees,
 } from "../models/bookingModel.js";
 
+const jsonArray = (value) => {
+  if (Array.isArray(value)) return value.map(String);
+  try { return JSON.parse(value || "[]").map(String); } catch { return []; }
+};
+const money = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+const SERVICE_EDIT_QUEUE_STATUSES = ["Waiting", "Your Turn"];
+
+function mapServiceEdit(row, serviceMap = new Map()) {
+  const oldIds = jsonArray(row.old_service_ids_json);
+  const requestedIds = jsonArray(row.requested_service_ids_json);
+  const details = (ids) => ids.map((id) => serviceMap.get(id)).filter(Boolean).map((service) => ({
+    id: service.id, name: service.name, price: Number(service.price), duration: Number(service.duration_minutes),
+  }));
+  return {
+    id: row.id,
+    requestKey: row.request_key,
+    bookingId: row.booking_id,
+    queueId: row.queue_id,
+    token: row.token,
+    customerId: row.customer_id,
+    customerName: row.customer_name,
+    shopId: row.shop_id,
+    shopName: row.shop_name,
+    barberId: row.barber_id,
+    barberName: row.barber_name,
+    oldServiceIds: oldIds,
+    requestedServiceIds: requestedIds,
+    oldServices: details(oldIds),
+    requestedServices: details(requestedIds),
+    amountDelta: Number(row.amount_delta),
+    proposedTotal: Number(row.proposed_total),
+    proposedDuration: Number(row.proposed_duration),
+    paymentReference: row.payment_reference || "",
+    payerName: row.payer_name || "",
+    status: row.status,
+    paymentStatus: row.payment_status,
+    refundStatus: row.refund_status,
+    resolutionNote: row.resolution_note || "",
+    resolvedBy: row.resolved_by || null,
+    resolvedByRole: row.resolved_by_role || null,
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+  };
+}
+
+async function serviceMapForEditRows(rows) {
+  const ids = [...new Set(rows.flatMap((row) => [
+    ...jsonArray(row.old_service_ids_json), ...jsonArray(row.requested_service_ids_json),
+  ]))];
+  if (!ids.length) return new Map();
+  const [services] = await pool.query(
+    `SELECT id,name,price,duration_minutes FROM services WHERE id IN (${ids.map(() => "?").join(",")})`, ids,
+  );
+  return new Map(services.map((service) => [service.id, service]));
+}
+
+async function validateEditedServices(connection, booking, serviceIds) {
+  const ids = serviceIds;
+  if (!ids.length || ids.length > 20 || new Set(ids).size !== ids.length)
+    throw Object.assign(new Error("Choose between 1 and 20 different services."), { status: 400 });
+  const marks = ids.map(() => "?").join(",");
+  const [services] = await connection.query(
+    `SELECT id,name,price,duration_minutes,enabled FROM services WHERE shop_id=? AND id IN (${marks})`,
+    [booking.shop_id, ...ids],
+  );
+  if (services.length !== ids.length || services.some((service) => !service.enabled))
+    throw Object.assign(new Error("One or more selected services are no longer available at this shop."), { status: 400 });
+  const availability = typeof booking.availability_json === "string"
+    ? (() => { try { return JSON.parse(booking.availability_json || "{}"); } catch { return {}; } })()
+    : booking.availability_json || {};
+  if (availability.annualSchedules?.[booking.booking_date]?.type === "closed")
+    throw Object.assign(new Error("The shop is closed on this booking date."), { status: 409 });
+  const [barbers] = await connection.query(
+    "SELECT status FROM barbers WHERE id=? AND shop_id=? LIMIT 1",
+    [booking.barber_id, booking.shop_id],
+  );
+  if (!barbers.length || barbers[0].status !== "Available")
+    throw Object.assign(new Error("The selected barber is not available for service changes right now."), { status: 409 });
+  let unavailable;
+  try {
+    [unavailable] = await connection.query(
+      `SELECT s.name,u.reason FROM service_unavailability u
+       JOIN services s ON s.id=u.service_id AND s.shop_id=u.shop_id
+       WHERE u.shop_id=? AND u.unavailable_date=? AND u.service_id IN (${marks})`,
+      [booking.shop_id, booking.booking_date, ...ids],
+    );
+  } catch (error) {
+    if (error.code === "ER_NO_SUCH_TABLE")
+      throw Object.assign(new Error("Service availability could not be checked right now."), { status: 503 });
+    throw error;
+  }
+  if (unavailable.length)
+    throw Object.assign(new Error(`${unavailable[0].name} is unavailable on the booking date${unavailable[0].reason ? `: ${unavailable[0].reason}` : "."}`), { status: 409 });
+  return ids.map((id) => services.find((service) => service.id === id));
+}
+
+export async function requestServiceEdit(req, res) {
+  const bookingId = String(req.params.id || "");
+  const requestKey = String(req.get("Idempotency-Key") || req.body?.requestKey || "");
+  const input = req.body?.serviceIds;
+  const serviceIds = Array.isArray(input) ? input.map((id) => String(id)) : [];
+  if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(requestKey))
+    return res.status(400).json({ message: "A valid edit request key is required." });
+  if (!serviceIds.length || serviceIds.length > 20 || new Set(serviceIds).size !== serviceIds.length)
+    return res.status(400).json({ message: "Choose between 1 and 20 different services." });
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [bookings] = await connection.query(
+      `SELECT b.*,DATE_FORMAT(COALESCE(b.booking_date,DATE(b.accepted_at),DATE(b.created_at)),'%Y-%m-%d') AS edit_booking_date,
+              s.name AS shop_name,s.upi_qr_url,s.status AS shop_status,s.active AS shop_active,s.availability_json
+       FROM payment_bookings b JOIN shops s ON s.id=b.shop_id
+       WHERE b.id=? AND b.customer_id=? LIMIT 1 FOR UPDATE`,
+      [bookingId, req.user.sub],
+    );
+    if (!bookings.length) {
+      await connection.rollback();
+      return res.status(404).json({ message: "Booking not found." });
+    }
+    const booking = bookings[0];
+    const [priorKey] = await connection.query(
+      "SELECT * FROM booking_service_edits WHERE customer_id=? AND request_key=? LIMIT 1",
+      [req.user.sub, requestKey],
+    );
+    if (priorKey.length) {
+      if (priorKey[0].booking_id !== bookingId) {
+        await connection.rollback();
+        return res.status(409).json({ message: "This request key was already used for another booking." });
+      }
+      const priorServices = await serviceMapForEditRows(priorKey);
+      await connection.commit();
+      return res.json({ edit: mapServiceEdit(priorKey[0], priorServices), repeated: true });
+    }
+    if (booking.status !== "accepted" || !SERVICE_EDIT_QUEUE_STATUSES.includes(booking.queue_status)) {
+      await connection.rollback();
+      return res.status(409).json({ message: "Services can only be edited while this booking is waiting." });
+    }
+    if (booking.shop_status !== "approved" || !booking.shop_active) {
+      await connection.rollback();
+      return res.status(409).json({ message: "This shop is not accepting service changes right now." });
+    }
+    const currentIds = jsonArray(booking.service_ids_json);
+    if (serviceIds.length === currentIds.length && serviceIds.every((id) => currentIds.includes(id))) {
+      await connection.commit();
+      return res.json({ unchanged: true, message: "The booking already has those services." });
+    }
+    const [activeRequests] = await connection.query(
+      `SELECT * FROM booking_service_edits WHERE booking_id=? AND status IN ('payment_review','refund_review') ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+      [bookingId],
+    );
+    if (activeRequests.length) {
+      if (JSON.stringify(jsonArray(activeRequests[0].requested_service_ids_json).sort()) === JSON.stringify([...serviceIds].sort())) {
+        const priorServices = await serviceMapForEditRows(activeRequests);
+        await connection.commit();
+        return res.json({ edit: mapServiceEdit(activeRequests[0], priorServices), repeated: true });
+      }
+      await connection.rollback();
+      return res.status(409).json({ message: "A service edit is already waiting for the shop to review." });
+    }
+    booking.booking_date = booking.edit_booking_date;
+    const services = await validateEditedServices(connection, booking, serviceIds);
+    const oldIds = currentIds;
+    const [currentServices] = await connection.query(
+      `SELECT id,name,price,duration_minutes FROM services WHERE shop_id=? AND id IN (${oldIds.map(() => "?").join(",")})`,
+      [booking.shop_id, ...oldIds],
+    );
+    if (currentServices.length !== oldIds.length) {
+      await connection.rollback();
+      return res.status(409).json({ message: "The existing service details could not be verified; contact the shop." });
+    }
+    const currentBase = money(currentServices.reduce((sum, service) => sum + Number(service.price), 0));
+    const requestedBase = money(services.reduce((sum, service) => sum + Number(service.price), 0));
+    const amountDelta = money(requestedBase - currentBase);
+    const [appliedRows] = await connection.query(
+      "SELECT COALESCE(SUM(amount_delta),0) AS total FROM booking_service_edits WHERE booking_id=? AND status='applied'",
+      [bookingId],
+    );
+    const newTotal = money(Number(booking.amount) + Number(appliedRows[0].total) + amountDelta);
+    const payerName = String(req.body?.payerName || "").trim().slice(0, 120);
+    if (amountDelta > 0 && (!booking.upi_qr_url || !payerName)) {
+      await connection.rollback();
+      return res.status(400).json({ message: "Pay the additional amount using the shop's UPI QR and enter your payer name." });
+    }
+    const status = amountDelta < 0 ? "refund_review" : "applied";
+    const editId = crypto.randomUUID();
+    const duration = services.reduce((sum, service) => sum + Number(service.duration_minutes), 0);
+    await connection.query(
+      `INSERT INTO booking_service_edits
+       (id,request_key,booking_id,customer_id,shop_id,barber_id,old_service_ids_json,requested_service_ids_json,
+        amount_delta,proposed_total,proposed_duration,payment_reference,payer_name,status,payment_status,refund_status,resolution_note,resolved_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [editId, requestKey, bookingId, req.user.sub, booking.shop_id, booking.barber_id, JSON.stringify(oldIds), JSON.stringify(serviceIds), amountDelta, newTotal, duration,
+        null, amountDelta > 0 ? payerName : null, status,
+        amountDelta > 0 ? "verified" : "not_required", amountDelta < 0 ? "requested" : "not_required",
+        amountDelta > 0 ? "Customer confirmed the additional UPI payment." : null,
+        amountDelta >= 0 ? new Date() : null],
+    );
+    if (status === "applied") {
+      await connection.query(
+        "UPDATE payment_bookings SET service_ids_json=?,duration_minutes=? WHERE id=? AND status='accepted' AND queue_status IN ('Waiting','Your Turn')",
+        [JSON.stringify(serviceIds), duration, bookingId],
+      );
+      await connection.query(
+        "INSERT INTO notifications(id,user_id,shop_id,tone,text,ref_id) VALUES (?,?,?,?,?,?)",
+        [crypto.randomUUID(), req.user.sub, booking.shop_id, "ok", `Your services for token #${booking.token} were updated. New total: ₹${newTotal.toFixed(2)}.`, bookingId],
+      );
+      await connection.query(
+        "INSERT INTO notifications(id,shop_id,tone,text,ref_id) VALUES (?,?,?,?,?)",
+        [crypto.randomUUID(), booking.shop_id, "info", `Token #${booking.token} service selection was updated by the customer.`, bookingId],
+      );
+    } else {
+      await connection.query(
+        "INSERT INTO notifications(id,shop_id,tone,text,ref_id) VALUES (?,?,?,?,?)",
+        [crypto.randomUUID(), booking.shop_id, "info", `Token #${booking.token} has a service edit awaiting ${status === "payment_review" ? "UPI payment verification" : "refund processing"}.`, bookingId],
+      );
+    }
+    const [created] = await connection.query("SELECT * FROM booking_service_edits WHERE id=?", [editId]);
+    const editServices = new Map([...currentServices, ...services].map((service) => [service.id, service]));
+    await connection.commit();
+    res.status(201).json({ edit: mapServiceEdit(created[0], editServices), totalAmount: newTotal, unchanged: false });
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    if (error.code === "ER_DUP_ENTRY")
+      return res.status(409).json({ message: "That service edit was already submitted." });
+    res.status(error.status || 500).json({ message: error.message || "Could not submit the service edit." });
+  } finally {
+    connection.release();
+  }
+}
+
+export async function listMyServiceEdits(req, res) {
+  const [rows] = await pool.query(
+    `SELECT e.*,b.queue_id,b.token,s.name AS shop_name,bar.name AS barber_name
+     FROM booking_service_edits e JOIN payment_bookings b ON b.id=e.booking_id
+     JOIN shops s ON s.id=e.shop_id JOIN barbers bar ON bar.id=e.barber_id
+     WHERE e.customer_id=? ORDER BY e.created_at DESC LIMIT 100`,
+    [req.user.sub],
+  );
+  const services = await serviceMapForEditRows(rows);
+  res.json(rows.map((row) => mapServiceEdit(row, services)));
+}
+
+export async function listPendingServiceEdits(req, res) {
+  const { sql, params } = scope(req);
+  const [rows] = await pool.query(
+    `SELECT e.*,b.queue_id,b.token,u.name AS customer_name,s.name AS shop_name,bar.name AS barber_name
+     FROM booking_service_edits e JOIN payment_bookings b ON b.id=e.booking_id
+     JOIN shops s ON s.id=e.shop_id JOIN users u ON u.id=e.customer_id
+     JOIN barbers bar ON bar.id=e.barber_id
+     WHERE e.status IN ('payment_review','refund_review') AND ${sql}
+     ORDER BY e.created_at ASC LIMIT 200`,
+    params,
+  );
+  const services = await serviceMapForEditRows(rows);
+  res.json(rows.map((row) => mapServiceEdit(row, services)));
+}
+
+export async function resolveServiceEdit(req, res) {
+  const action = String(req.body?.action || "");
+  if (!["confirm_payment", "confirm_refund", "reject"].includes(action))
+    return res.status(400).json({ message: "Choose a valid service edit action." });
+  const { sql, params } = scope(req);
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.query(
+      `SELECT e.*,b.queue_id,b.token,b.status AS booking_status,b.queue_status,b.amount,
+              b.service_ids_json,b.shop_id AS current_shop_id,b.barber_id AS current_barber_id,
+              DATE_FORMAT(COALESCE(b.booking_date,DATE(b.accepted_at),DATE(b.created_at)),'%Y-%m-%d') AS edit_booking_date,
+              s.name AS shop_name,s.upi_qr_url,s.availability_json,u.name AS customer_name,bar.name AS barber_name
+       FROM booking_service_edits e JOIN payment_bookings b ON b.id=e.booking_id
+       JOIN shops s ON s.id=e.shop_id JOIN users u ON u.id=e.customer_id JOIN barbers bar ON bar.id=e.barber_id
+       WHERE e.id=? AND ${sql} LIMIT 1 FOR UPDATE`,
+      [req.params.editId, ...params],
+    );
+    if (!rows.length) {
+      await connection.rollback();
+      return res.status(404).json({ message: "Service edit not found for this shop." });
+    }
+    const edit = rows[0];
+    if (edit.status === "applied" || edit.status === "rejected") {
+      await connection.commit();
+      return res.json({ edit: mapServiceEdit(edit), unchanged: true });
+    }
+    if ((action === "confirm_payment" && edit.status !== "payment_review") ||
+        (action === "confirm_refund" && edit.status !== "refund_review")) {
+      await connection.rollback();
+      return res.status(409).json({ message: "That action does not match the pending payment or refund." });
+    }
+    if (action === "reject") {
+      await connection.query(
+        `UPDATE booking_service_edits SET status='rejected',
+         payment_status=IF(payment_status='submitted','declined',payment_status),
+         refund_status=IF(refund_status='requested','not_required',refund_status),
+         resolution_note=?,resolved_by=?,resolved_by_role=?,resolved_at=NOW() WHERE id=?`,
+        [String(req.body?.note || "Request was not approved by the shop.").trim().slice(0, 255), req.user.sub, req.user.role, edit.id],
+      );
+      await connection.query(
+        "INSERT INTO notifications(id,user_id,shop_id,tone,text,ref_id) VALUES (?,?,?,?,?,?)",
+        [crypto.randomUUID(), edit.customer_id, edit.shop_id, "alert", `The shop did not approve the requested service change for token #${edit.token}. If you sent extra UPI payment, contact the shop to arrange its return.`, edit.booking_id],
+      );
+      const [rejectedRows] = await connection.query("SELECT * FROM booking_service_edits WHERE id=?", [edit.id]);
+      await connection.commit();
+      return res.json({ edit: mapServiceEdit({ ...edit, ...rejectedRows[0] }) });
+    }
+    if (edit.booking_status !== "accepted" || !SERVICE_EDIT_QUEUE_STATUSES.includes(edit.queue_status)) {
+      await connection.rollback();
+      return res.status(409).json({ message: "This booking is no longer waiting, so its services cannot be changed." });
+    }
+    edit.shop_id = edit.current_shop_id;
+    edit.barber_id = edit.current_barber_id;
+    edit.booking_date = edit.edit_booking_date;
+    const requestedIds = jsonArray(edit.requested_service_ids_json);
+    const services = await validateEditedServices(connection, edit, requestedIds);
+    const oldIds = jsonArray(edit.service_ids_json);
+    if (JSON.stringify([...oldIds].sort()) !== JSON.stringify(jsonArray(edit.old_service_ids_json).sort())) {
+      await connection.rollback();
+      return res.status(409).json({ message: "The booking services changed after this request. Refresh and submit a new edit." });
+    }
+    const [current] = await connection.query(
+      `SELECT id,price FROM services WHERE shop_id=? AND id IN (${oldIds.map(() => "?").join(",")})`,
+      [edit.shop_id, ...oldIds],
+    );
+    if (current.length !== oldIds.length) {
+      await connection.rollback();
+      return res.status(409).json({ message: "The existing service prices could not be verified." });
+    }
+    const delta = money(services.reduce((sum, service) => sum + Number(service.price), 0) - current.reduce((sum, service) => sum + Number(service.price), 0));
+    if (money(delta) !== money(edit.amount_delta)) {
+      await connection.rollback();
+      return res.status(409).json({ message: "Service prices changed after submission. Ask the customer to review the updated total." });
+    }
+    const duration = services.reduce((sum, service) => sum + Number(service.duration_minutes), 0);
+    await connection.query(
+      "UPDATE payment_bookings SET service_ids_json=?,duration_minutes=? WHERE id=? AND status='accepted' AND queue_status IN ('Waiting','Your Turn')",
+      [JSON.stringify(requestedIds), duration, edit.booking_id],
+    );
+    const paymentUpdate = action === "confirm_payment" ? "payment_status='verified'" : "refund_status='shop_confirmed'";
+    const resolutionNote = action === "confirm_payment"
+      ? "Additional UPI payment manually verified by the shop."
+      : "The shop confirmed it manually processed the refund outside this system.";
+    await connection.query(
+      `UPDATE booking_service_edits SET status='applied',${paymentUpdate},resolution_note=?,resolved_by=?,resolved_by_role=?,resolved_at=NOW() WHERE id=?`,
+      [resolutionNote, req.user.sub, req.user.role, edit.id],
+    );
+    await connection.query(
+      "INSERT INTO notifications(id,user_id,shop_id,tone,text,ref_id) VALUES (?,?,?,?,?,?)",
+      [crypto.randomUUID(), edit.customer_id, edit.shop_id, "ok", action === "confirm_payment"
+        ? `The shop verified your additional payment and updated services for token #${edit.token}.`
+        : `The shop confirmed the refund and updated services for token #${edit.token}.`, edit.booking_id],
+    );
+    const [resolvedRows] = await connection.query("SELECT * FROM booking_service_edits WHERE id=?", [edit.id]);
+    await connection.commit();
+    const resolvedServices = new Map(services.map((service) => [service.id, service]));
+    res.json({ edit: mapServiceEdit({ ...edit, ...resolvedRows[0] }, resolvedServices), changed: true });
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    res.status(error.status || 500).json({ message: error.message || "Could not resolve the service edit." });
+  } finally {
+    connection.release();
+  }
+}
+
 // Owners see bookings of shops they own. A shop or co-owner login only sees their own shop.
 const scope = (req) =>
   req.user.role === "shop" || req.user.role === "co_owner"
@@ -478,6 +841,24 @@ export async function setQueueStatus(req, res) {
     return res.status(404).json({ message: "Queue entry not found." });
 
   const current = booking.queueStatus || "Waiting";
+  if (action || status !== current) {
+    let pendingEdits;
+    try {
+      [pendingEdits] = await pool.query(
+        "SELECT id FROM booking_service_edits WHERE booking_id=? AND status IN ('payment_review','refund_review') LIMIT 1",
+        [booking.id],
+      );
+    } catch (error) {
+      if (error.code !== "ER_NO_SUCH_TABLE") throw error;
+      pendingEdits = [];
+    }
+    const callerStillWaiting = !action && status === "Your Turn" &&
+      ["Waiting", "Your Turn"].includes(current);
+    if (pendingEdits.length && !callerStillWaiting)
+      return res.status(409).json({
+        message: "Resolve the pending service payment or refund before changing this queue entry.",
+      });
+  }
 
   if (action) {
     if (["closure_wait", "closure_refund"].includes(action)) {

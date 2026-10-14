@@ -45,6 +45,7 @@ import Prebookings from "./pages/owner/Prebookings";
 import Barbers from "./pages/owner/Barbers";
 import Services from "./pages/owner/Services";
 import AllShopServices from "./pages/owner/AllShopServices";
+import Schemes from "./pages/owner/Schemes";
 import OwnerComplaints from "./pages/owner/Complaints";
 import ClosureResolutions from "./pages/owner/ClosureResolutions";
 import { Payments, Customers, Earnings, Reviews } from "./pages/owner/Business";
@@ -179,6 +180,7 @@ export default function App() {
             <Route path="barbers" element={<Barbers />} />
             <Route path="services" element={<Services />} />
             <Route path="all-services" element={<AllShopServices />} />
+            <Route path="schemes" element={<Schemes />} />
             <Route path="customers" element={<Customers />} />
             <Route path="payments" element={<Payments />} />
             <Route path="earnings" element={<Earnings />} />

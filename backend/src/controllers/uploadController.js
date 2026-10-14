@@ -1,4 +1,5 @@
 import { uploadImage } from "../config/cloudinary.js";
+import { pool } from "../config/db.js";
 
 const ACCEPTED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -33,6 +34,17 @@ export async function uploadImages(req, res) {
     const folder = isAllowedFolder(requestedFolder)
       ? requestedFolder
       : DEFAULT_FOLDER;
+    const schemeFolder = /^barber-queue\/shops\/([^/]+)\/schemes$/.exec(folder);
+    if (schemeFolder) {
+      if (req.user?.role !== "owner")
+        return res.status(403).json({ message: "Only the shop owner can upload scheme images." });
+      const [owned] = await pool.query(
+        "SELECT id FROM shops WHERE id=? AND owner_id=? LIMIT 1",
+        [schemeFolder[1], req.user.sub],
+      );
+      if (!owned.length)
+        return res.status(404).json({ message: "Shop not found or not owned by this account." });
+    }
     const result = await uploadImage(file.buffer, folder);
     images.push({
       id: result.public_id,
