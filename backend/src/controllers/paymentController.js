@@ -314,6 +314,90 @@ async function validateSelection(
   return { shop: shops[0], services, customer: users[0], amount, duration };
 }
 
+const jsonIds = (value) => {
+  if (Array.isArray(value)) return value.map(String);
+  try { return JSON.parse(value || "[]").map(String); } catch { return []; }
+};
+const money = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+
+async function evaluateScheme(connection, { shopId, barberId, serviceIds, services, customerId, promoCode, schemeId, lock = false }) {
+  const code = String(promoCode || "").trim().toUpperCase();
+  let sql = `SELECT * FROM schemes WHERE shop_id=? AND status='active'
+    AND starts_at<=UTC_TIMESTAMP() AND ends_at>=UTC_TIMESTAMP()`;
+  const params = [shopId];
+  if (schemeId) { sql += " AND id=?"; params.push(schemeId); }
+  else if (code) { sql += " AND UPPER(promo_code)=?"; params.push(code); }
+  else sql += " AND promo_code IS NULL";
+  sql += lock ? " FOR UPDATE" : "";
+  const [candidates] = await connection.query(sql, params);
+  if (!candidates.length && code)
+    throw Object.assign(new Error("This promo code is not active or valid for this booking."), { status: 400 });
+  if (schemeId && !candidates.length)
+    throw Object.assign(new Error("This offer is no longer valid. Request a new payment quote."), { status: 409 });
+
+  const serviceById = new Map(services.map((service) => [String(service.id), service]));
+  const baseAmount = money(services.reduce((sum, service) => sum + Number(service.price), 0));
+  let bestAutomatic = null;
+  for (const offer of candidates) {
+    const eligibleServiceIds = offer.all_services
+      ? serviceIds
+      : jsonIds(offer.service_ids_json).filter((id) => serviceById.has(id));
+    if (!eligibleServiceIds.length) {
+      if (code || schemeId) throw Object.assign(new Error("This offer does not apply to the selected services."), { status: 400 });
+      continue;
+    }
+    if (!offer.all_barbers && !jsonIds(offer.barber_ids_json).includes(String(barberId))) {
+      if (code || schemeId) throw Object.assign(new Error("This offer does not apply to the selected barber."), { status: 400 });
+      continue;
+    }
+    if (baseAmount < Number(offer.minimum_amount || 0)) {
+      if (code || schemeId) throw Object.assign(new Error(`This offer requires a minimum booking amount of ₹${Number(offer.minimum_amount).toFixed(2)}.`), { status: 400 });
+      continue;
+    }
+    const [useRows] = await connection.query(
+      `SELECT COUNT(*) AS uses,COALESCE(SUM(customer_id=?),0) AS customer_uses
+       FROM payment_bookings WHERE scheme_id=? AND status IN ('payment_submitted','accepted')`,
+      [customerId, offer.id],
+    );
+    const uses = Number(useRows[0]?.uses || 0);
+    const customerUses = Number(useRows[0]?.customer_uses || 0);
+    if ((offer.usage_limit != null && uses >= Number(offer.usage_limit)) ||
+        (offer.per_customer_limit != null && customerUses >= Number(offer.per_customer_limit))) {
+      if (code || schemeId) throw Object.assign(new Error("This offer has reached its redemption limit."), { status: 409 });
+      continue;
+    }
+    const eligibleSubtotal = money(eligibleServiceIds.reduce((sum, id) => sum + Number(serviceById.get(id).price), 0));
+    let discount = offer.discount_type === "percentage"
+      ? money(eligibleSubtotal * Number(offer.discount_value) / 100)
+      : Math.min(eligibleSubtotal, Number(offer.discount_value));
+    if (offer.maximum_discount != null) discount = Math.min(discount, Number(offer.maximum_discount));
+    discount = money(Math.min(discount, eligibleSubtotal, baseAmount));
+    if (discount >= baseAmount) {
+      if (code || schemeId) throw Object.assign(new Error("This offer cannot reduce the booking to a zero payment."), { status: 400 });
+      continue;
+    }
+    if (discount <= 0) {
+      if (code || schemeId) throw Object.assign(new Error("This offer does not provide a discount for the selected services."), { status: 400 });
+      continue;
+    }
+    const eligible = {
+      schemeId: offer.id,
+      discountAmount: discount,
+      originalAmount: baseAmount,
+      discountedSubtotal: money(baseAmount - discount),
+      promoCode: offer.promo_code || "",
+      scheme: {
+        id: offer.id, title: offer.title, discountType: offer.discount_type,
+        discountValue: Number(offer.discount_value),
+      },
+    };
+    if (code || schemeId) return eligible;
+    if (!bestAutomatic || eligible.discountAmount > bestAutomatic.discountAmount) bestAutomatic = eligible;
+  }
+  if (bestAutomatic) return bestAutomatic;
+  return { schemeId: null, discountAmount: 0, originalAmount: baseAmount, discountedSubtotal: baseAmount, promoCode: "", scheme: null };
+}
+
 function requestedBookingDate(value) {
   const date = String(value || "");
   const parsed = /^\d{4}-\d{2}-\d{2}$/.test(date)
@@ -438,7 +522,10 @@ export async function paymentQuote(req, res) {
           bookingId: blocked[0].id,
         });
 
-    const finalAmount = await chooseAmount(connection, shopId, amount);
+    const applied = await evaluateScheme(connection, {
+      shopId, barberId, serviceIds, services, customerId, promoCode: req.body?.promoCode,
+    });
+    const finalAmount = await chooseAmount(connection, shopId, applied.discountedSubtotal);
     const quotePayload = {
       customerId,
       shopId,
@@ -447,11 +534,19 @@ export async function paymentQuote(req, res) {
       bookingDate,
       beneficiaryKey: who.key,
       amount: finalAmount,
+      originalAmount: applied.originalAmount,
+      discountAmount: applied.discountAmount,
+      schemeId: applied.schemeId,
+      promoCode: applied.promoCode,
+      discountedSubtotal: applied.discountedSubtotal,
       qrUrl: shop.upi_qr_url,
       exp: Date.now() + AMOUNT_WINDOW_MINUTES * 60 * 1000,
     };
     res.json({
       ...responsePayload({ id: null, amount: finalAmount }, shop, services),
+      originalAmount: applied.originalAmount,
+      discountAmount: applied.discountAmount,
+      scheme: applied.scheme,
       quoteToken: signQuote(quotePayload),
     });
   } catch (error) {
@@ -555,6 +650,15 @@ export async function submitPayment(req, res) {
         { status: 400 },
       );
 
+    const applied = await evaluateScheme(connection, {
+      shopId, barberId, serviceIds, services, customerId,
+      promoCode: quote.promoCode, schemeId: quote.schemeId, lock: Boolean(quote.schemeId),
+    });
+    if (money(applied.originalAmount) !== money(quote.originalAmount) ||
+        money(applied.discountAmount) !== money(quote.discountAmount) ||
+        money(applied.discountedSubtotal) !== money(quote.discountedSubtotal))
+      throw Object.assign(new Error("Offer eligibility or discount changed. Reopen the payment screen for an updated quote."), { status: 409 });
+
     const finalAmount = Number(quote.amount);
     if (!Number.isFinite(finalAmount) || finalAmount <= 0)
       throw Object.assign(new Error("Invalid payment amount."), {
@@ -592,10 +696,10 @@ export async function submitPayment(req, res) {
   `INSERT INTO payment_bookings
    (
      id, shop_id, barber_id, customer_id, booking_date, service_ids_json,
-     amount, duration_minutes, beneficiary_json, beneficiary_key,
+     amount, original_amount, discount_amount, scheme_id, duration_minutes, beneficiary_json, beneficiary_key,
      request_hash, payment_method, status, payer_name, payment_submitted_at
    )
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
   [
     bookingId,
     shopId,
@@ -604,6 +708,9 @@ export async function submitPayment(req, res) {
     bookingDate,
     JSON.stringify(serviceIds),
     finalAmount,
+    applied.originalAmount,
+    applied.discountAmount,
+    applied.schemeId,
     duration,
     JSON.stringify(who.person),
     who.key,

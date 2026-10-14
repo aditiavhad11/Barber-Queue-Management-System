@@ -1145,131 +1145,19 @@ export function OwnerProvider({ children }) {
       };
     });
 
-  const addServiceToQueue = ({ queueId, serviceIds }) => {
-    const customerId = state.customer?.id;
-    const selectedIds = [...new Set((serviceIds || []).map(String))];
-    const existingEntry = state.shops.some((shop) =>
-      Object.values(shop.queues || {}).some((queue) =>
-        queue.some(
-          (entry) =>
-            entry.id === queueId &&
-            entry.customerId === customerId &&
-            ACTIVE_QUEUE_STATUSES.includes(entry.status),
-        ),
-      ),
+  const requestServiceEdit = async ({
+    bookingId,
+    serviceIds,
+    payerName,
+    requestKey,
+  }) => {
+    const { data } = await api.post(
+      `/bookings/${bookingId}/service-edits`,
+      { serviceIds, payerName },
+      { headers: { "Idempotency-Key": requestKey } },
     );
-    if (!customerId || !existingEntry || !selectedIds.length) return false;
-    setState((p) => {
-      for (const shop of p.shops) {
-        for (const [barberId, q] of Object.entries(shop.queues || {})) {
-          const entry = q.find(
-            (e) =>
-              e.id === queueId &&
-              e.customerId === p.customer?.id &&
-              ACTIVE_QUEUE_STATUSES.includes(e.status),
-          );
-          if (!entry) continue;
-          const ids = selectedIds;
-          const currentServices =
-            Array.isArray(entry.services) && entry.services.length
-              ? entry.services
-              : [
-                  shop.servicesList.find(
-                    (service) => service.id === entry.service,
-                  ),
-                ]
-                  .filter(Boolean)
-                  .map((service) => ({
-                    id: service.id,
-                    name: service.name,
-                    price: Number(service.price),
-                    duration: Number(service.duration),
-                  }));
-          const additions = ids
-            .map((id) =>
-              shop.servicesList.find((service) => String(service.id) === id),
-            )
-            .filter(Boolean)
-            .filter(
-              (service) =>
-                service.enabled !== false &&
-                !currentServices.some(
-                  (item) => String(item.id) === String(service.id),
-                ),
-            );
-          if (!additions.length) return p;
-          const services = [
-            ...currentServices,
-            ...additions.map((service) => ({
-              id: service.id,
-              name: service.name,
-              price: Number(service.price),
-              duration: Number(service.duration),
-            })),
-          ];
-          const total = services.reduce(
-            (n, service) => n + Number(service.price || 0),
-            0,
-          );
-          const duration = services.reduce(
-            (n, service) => n + Number(service.duration || 0),
-            0,
-          );
-          const now = new Date().toISOString();
-          const nextEntry = {
-            ...entry,
-            services,
-            service: services[0].id,
-            serviceDuration: duration,
-            paymentAmount: total,
-            additionalServicesAddedAt: now,
-          };
-          const nextQ = q.map((item) =>
-            item.id === queueId ? nextEntry : item,
-          );
-          const payment = {
-            id: `TXN-${crypto.randomUUID()}`,
-            customerId: p.customer.id,
-            customer: p.customer.name,
-            beneficiary: entry.beneficiary?.name || p.customer.name,
-            service: additions.map((item) => item.name).join(" + "),
-            barber: shop.barbersList.find((barber) => barber.id === barberId)
-              ?.name,
-            amount: additions.reduce((n, item) => n + Number(item.price), 0),
-            date: new Date().toLocaleDateString("en-IN"),
-            time: new Date().toLocaleTimeString("en-IN", {
-              hour: "numeric",
-              minute: "2-digit",
-            }),
-            status: "Successful",
-            shopId: shop.id,
-            queueId,
-          };
-          const note = {
-            id: `n-${crypto.randomUUID()}`,
-            tone: "ok",
-            text: `Additional service added to #${entry.token}: ${additions.map((item) => item.name).join(" + ")}.`,
-            createdAt: now,
-          };
-          return {
-            ...p,
-            shops: p.shops.map((item) =>
-              item.id === shop.id
-                ? {
-                    ...item,
-                    queues: { ...item.queues, [barberId]: nextQ },
-                    payments: [...(item.payments || []), payment],
-                    notifications: [note, ...(item.notifications || [])],
-                  }
-                : item,
-            ),
-            customerNotifications: [note, ...p.customerNotifications],
-          };
-        }
-      }
-      return p;
-    });
-    return true;
+    await syncRef.current?.();
+    return data;
   };
 
   const contactCustomer = async ({ shopId, queueId, message }) => {
@@ -1655,7 +1543,8 @@ export function OwnerProvider({ children }) {
               status,
               arrival: "ontime",
               paymentStatus: "Successful",
-              paymentAmount: b.amount,
+              paymentAmount: b.totalAmount ?? b.amount,
+              bookingDate: b.bookingDate,
               joinedAt: new Date(
                 b.acceptedAt || b.paidAt || Date.now(),
               ).getTime(),
@@ -1846,7 +1735,8 @@ export function OwnerProvider({ children }) {
         status: queue.length === 0 ? "Your Turn" : "Waiting",
         arrival: "ontime",
         paymentStatus: "Successful",
-        paymentAmount: b.amount,
+        paymentAmount: b.totalAmount ?? b.amount,
+        bookingDate: b.bookingDate,
         joinedAt: Date.now(),
         createdAt: new Date().toISOString(),
       };
@@ -2055,7 +1945,7 @@ export function OwnerProvider({ children }) {
     addServiceToAllShops,
     setQueueStatus,
     queueAction,
-    addServiceToQueue,
+    requestServiceEdit,
     contactCustomer,
     addComplaint,
     saveBarber,

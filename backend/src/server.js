@@ -11,6 +11,7 @@ import notificationRoutes from "./routes/notificationRoutes.js";
 import bookingRoutes from "./routes/bookingRoutes.js";
 import complaintRoutes from "./routes/complaintRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
+import schemeRoutes from "./routes/schemeRoutes.js";
 import "./jobs/emergencyClosureQueue.js";
 dotenv.config();
 
@@ -63,6 +64,7 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/bookings", bookingRoutes);
 app.use("/api/complaints", complaintRoutes);
 app.use("/api/uploads", uploadRoutes);
+app.use("/api/schemes", schemeRoutes);
 
 app.use((err, _req, res, _next) => {
   console.error(err);

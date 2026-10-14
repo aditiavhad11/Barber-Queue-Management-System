@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useOwner } from "../../hooks/useOwnerStore";
+import { api } from "../../services/api";
 import {
   PageHead,
   StatusBadge,
@@ -32,6 +33,7 @@ export default function Queue() {
     pendingBookings,
     acceptBooking,
     declineBooking,
+    refreshBookings,
   } = useOwner();
   const [busyId, setBusyId] = useState(null);
   const [declining, setDeclining] = useState(null);
@@ -44,6 +46,39 @@ export default function Queue() {
     "Your turn is coming up. Please head to the shop.",
   );
   const [sending, setSending] = useState(false);
+  const [serviceEdits, setServiceEdits] = useState([]);
+  const [serviceEditError, setServiceEditError] = useState("");
+  const [serviceEditBusy, setServiceEditBusy] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    const loadServiceEdits = () => api.get("/bookings/service-edits/pending", { toastOnError: false })
+      .then(({ data }) => {
+        if (!cancelled) {
+          setServiceEdits((data || []).filter((edit) => edit.shopId === shop?.id));
+          setServiceEditError("");
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) setServiceEditError(error.response?.data?.message || "Could not load service edit requests.");
+      });
+    loadServiceEdits();
+    const timer = setInterval(loadServiceEdits, 8000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [shop?.id]);
+  const resolveServiceEdit = async (edit, action) => {
+    setServiceEditBusy(edit.id);
+    setServiceEditError("");
+    try {
+      await api.patch("/bookings/service-edits/" + edit.id, { action });
+      setServiceEdits((items) => items.filter((item) => item.id !== edit.id));
+      await refreshBookings();
+      notifySuccess(action === "confirm_refund" ? "Refund confirmation recorded and services updated." : action === "confirm_payment" ? "Payment verified and services updated." : "Service edit declined.");
+    } catch (error) {
+      setServiceEditError(error.response?.data?.message || "Could not update the service edit.");
+    } finally {
+      setServiceEditBusy("");
+    }
+  };
   const accept = async (b) => {
     setBusyId(b.id);
     setPayError("");
@@ -210,6 +245,35 @@ export default function Queue() {
         </section>
       )}
 
+      {(serviceEdits.length > 0 || serviceEditError) && (
+        <section className="border border-khaki bg-card p-5 mb-10">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-2xl">Service changes awaiting review</h2>
+            <span className="text-sm text-soft">{serviceEdits.length} pending</span>
+          </div>
+          <p className="text-sm text-soft mt-1">Verify the UPI transaction before confirming an added service. For a reduction, process the refund outside this app first, then confirm it here.</p>
+          {serviceEditError && <p className="text-rose text-sm mt-3" role="alert">{serviceEditError}</p>}
+          {serviceEdits.map((edit) => (
+            <div key={edit.id} className="py-4 border-t border-khaki mt-4 flex flex-wrap items-center justify-between gap-4">
+              <div className="text-sm">
+                <b className="text-base">Token #{edit.token} · {edit.customerName}</b>
+                <p className="text-soft mt-1">{edit.oldServices.map((item) => item.name).join(" + ") || "No services"} → {edit.requestedServices.map((item) => item.name).join(" + ")}</p>
+                <p className="mt-1">{edit.proposedDuration} min · {edit.amountDelta > 0 ? "Additional payment ₹" + edit.amountDelta.toFixed(2) : edit.amountDelta < 0 ? "Refund ₹" + Math.abs(edit.amountDelta).toFixed(2) : "No price change"}</p>
+                <p className="text-xs text-soft mt-1">Proposed booking total: ₹{edit.proposedTotal.toFixed(2)}</p>
+                {edit.status === "payment_review" && <p className="text-xs text-soft mt-1">Payer: {edit.payerName} · UPI reference: {edit.paymentReference}</p>}
+                {edit.status === "refund_review" && <p className="text-xs text-soft mt-1">Confirm only after refunding ₹{Math.abs(edit.amountDelta).toFixed(2)} through your UPI app.</p>}
+              </div>
+              <div className="flex gap-2">
+                <button className="btn-ghost !py-2" disabled={serviceEditBusy === edit.id} onClick={() => resolveServiceEdit(edit, "reject")}>Decline</button>
+                <button className="btn !py-2" disabled={serviceEditBusy === edit.id} onClick={() => resolveServiceEdit(edit, edit.status === "payment_review" ? "confirm_payment" : "confirm_refund")}>
+                  {serviceEditBusy === edit.id ? "Saving..." : edit.status === "payment_review" ? "Verify payment & apply" : "Confirm refund & apply"}
+                </button>
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+
       <div className="grid xl:grid-cols-2 gap-10">
         {barbers.map((b) => {
           const list = activeOf(queues[b.id] || []);
@@ -232,6 +296,7 @@ export default function Queue() {
                 list.map((e, i) => {
                   const wait = etaFor(services, queues[b.id] || [], i);
                   const d = durOf(services, e.service);
+                  const hasPendingEdit = serviceEdits.some((edit) => edit.bookingId === e.bookingId);
                   const svcNames =
                     e.services?.map((x) => x.name).join(" + ") ||
                     services.find((s) => s.id === e.service)?.name;
@@ -254,7 +319,7 @@ export default function Queue() {
                             </span>
                           )}
                           <p className="text-sm text-coffee/70">
-                            {svcNames} · {totalDur} min · Position {i + 1} · {i}{" "}
+                            {svcNames} · {totalDur} min · ₹{Number(e.paymentAmount || 0).toFixed(2)} total · Position {i + 1} · {i}{" "}
                             ahead
                           </p>
                         </div>
@@ -300,6 +365,7 @@ export default function Queue() {
                         </div>
                       )}
                       <div className="flex flex-wrap gap-2 mt-3">
+                        {hasPendingEdit && <p className="w-full text-xs text-coffee/70">Review the service payment or refund before moving this ticket past the waiting stage.</p>}
                         {e.status === "Waiting" &&
                           e.id === firstWaiting?.id && (
                             <button
@@ -313,6 +379,7 @@ export default function Queue() {
                           <>
                             <button
                               className="btn-ghost !py-2 text-rose"
+                              disabled={hasPendingEdit}
                               onClick={() =>
                                 queueAction(shop.id, b.id, e.id, "remove")
                               }
@@ -322,12 +389,13 @@ export default function Queue() {
                             <button
                               className="btn !py-2"
                               onClick={() => act(b.id, e, "Start")}
-                              disabled={hasSvc}
+                              disabled={hasSvc || hasPendingEdit}
                             >
                               Start service
                             </button>
                             <button
                               className="btn-ghost !py-2"
+                              disabled={hasPendingEdit}
                               onClick={() => act(b.id, e, "No Show")}
                             >
                               No show
@@ -342,7 +410,7 @@ export default function Queue() {
                             Complete service
                           </button>
                         )}
-                        {e.status !== "In Service" && (
+                        {e.status !== "In Service" && !hasPendingEdit && (
                           <>
                             <button
                               className="btn-ghost !py-2"

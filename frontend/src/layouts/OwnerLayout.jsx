@@ -31,6 +31,7 @@ import {
   Layers3,
   MessageSquareWarning,
   RotateCcw,
+  Sparkles,
 } from "lucide-react";
 import { useAuth } from "../hooks/useAuth";
 import { useOwner } from "../hooks/useOwnerStore";
@@ -53,6 +54,7 @@ const groups = [
       ["/owner/shop/location", "Location", MapPin],
       ["/owner/shop/hours", "Opening Hours", Clock],
       ["/owner/shop/policies", "Policies", ScrollText],
+      ["/owner/schemes", "Schemes & Offers", Sparkles],
     ],
   ],
   [
@@ -85,6 +87,7 @@ const open_ok = [
   "/owner/settings",
   "/owner/profile",
   "/owner/all-services",
+  "/owner/schemes",
 ];
 export default function OwnerLayout() {
   const [drawer, setDrawer] = useState(false);

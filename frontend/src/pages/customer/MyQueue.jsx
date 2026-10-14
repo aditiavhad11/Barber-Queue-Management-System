@@ -6,18 +6,26 @@ import { useOwner } from "../../hooks/useOwnerStore";
 import { activeOf, etaFor } from "../../utils/ownerEta";
 import { distanceKm, getCurrentLocation } from "../../utils/location";
 import { Badge, Empty } from "../../components/common/ui";
+import { api } from "../../services/api";
 
 const progress = ["Booked", "Waiting", "Your Turn", "In Service", "Completed"];
 const activeStatuses = ["Waiting", "Your Turn", "In Service"];
 
 export default function MyQueue() {
-  const { customerQueues, setQueueStatus, queueAction, addServiceToQueue } = useOwner();
+  const { customerQueues, setQueueStatus, queueAction, requestServiceEdit, refreshBookings } = useOwner();
   const [selectedId, setSelectedId] = useState(null);
   const [distance, setDistance] = useState(null);
   const [adding, setAdding] = useState(false);
   const [selectedServices, setSelectedServices] = useState([]);
   const [paying, setPaying] = useState(false);
   const [addServiceError, setAddServiceError] = useState("");
+  const [serviceEdits, setServiceEdits] = useState([]);
+  const [unavailableServices, setUnavailableServices] = useState([]);
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
+  const [availabilityError, setAvailabilityError] = useState("");
+  const [payerName, setPayerName] = useState("");
+  const [requestKey, setRequestKey] = useState("");
+  const [serviceEditSuccess, setServiceEditSuccess] = useState("");
   const [swapTargetPosition, setSwapTargetPosition] = useState("");
   const handledClosureAction = useRef("");
 
@@ -55,6 +63,36 @@ export default function MyQueue() {
     handledClosureAction.current = key;
     queueAction(target.shop.id, target.barberId, target.entry.id, action);
   }, [customerQueues, queueAction]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadEdits = async () => {
+      try {
+        const { data } = await api.get("/bookings/service-edits/mine", { toastOnError: false });
+        if (!cancelled) setServiceEdits(data || []);
+      } catch {
+        if (!cancelled) setServiceEdits([]);
+      }
+    };
+    loadEdits();
+    const timer = setInterval(loadEdits, 8000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, []);
+
+  useEffect(() => {
+    if (!adding || !selected?.entry.bookingDate || !selected?.shop.id) return undefined;
+    let cancelled = false;
+    setAvailabilityError("");
+    setAvailabilityLoading(true);
+    setUnavailableServices([]);
+    api.get("/shops/" + selected.shop.id + "/service-availability", {
+      params: { date: selected.entry.bookingDate }, toastOnError: false,
+    })
+      .then(({ data }) => { if (!cancelled) setUnavailableServices((data || []).map((item) => String(item.serviceId))); })
+      .catch((error) => { if (!cancelled) setAvailabilityError(error.response?.data?.message || "Could not check service availability."); })
+      .finally(() => { if (!cancelled) setAvailabilityLoading(false); });
+    return () => { cancelled = true; };
+  }, [adding, selected?.entry.bookingDate, selected?.shop.id]);
 
   if (!customerQueues.length)
     return (
@@ -94,9 +132,18 @@ export default function MyQueue() {
           : entry.status === "Completed"
             ? 4
             : 0;
-  const addable = (shop.servicesList || []).filter(
-    (s) => s.enabled !== false && !services.some((x) => x.id === s.id),
+  const currentServiceIds = services.map((service) => String(service.id));
+  const editableServices = (shop.servicesList || []).filter((service) =>
+    service.enabled !== false &&
+    !unavailableServices.includes(String(service.id)),
   );
+  const desiredServiceRows = (shop.servicesList || []).filter((service) => selectedServices.includes(String(service.id)));
+  const currentServiceBase = services.reduce((sum, service) => sum + Number(service.price || 0), 0);
+  const desiredServiceBase = desiredServiceRows.reduce((sum, service) => sum + Number(service.price || 0), 0);
+  const servicePriceDelta = Math.round((desiredServiceBase - currentServiceBase + Number.EPSILON) * 100) / 100;
+  const proposedTotal = Math.max(0, Number(entry.paymentAmount || 0) + servicePriceDelta);
+  const pendingServiceEdit = serviceEdits.find((edit) => edit.bookingId === entry.bookingId && ["payment_review", "refund_review"].includes(edit.status));
+
   const findDistance = async () => {
     try {
       const loc = await getCurrentLocation();
@@ -112,23 +159,37 @@ export default function MyQueue() {
     if (!ok) return;
     setQueueStatus(shop.id, selected.barberId, entry.id, "Cancelled");
   };
-  const addSelected = async () => {
-    if (!selectedServices.length || paying) return;
+  const submitServiceEdit = async () => {
+    if (!selectedServices.length || paying || !entry.bookingId) return;
+    if (servicePriceDelta > 0 && !payerName.trim()) {
+      setAddServiceError("Enter the payer name after paying the additional amount.");
+      return;
+    }
     setPaying(true);
     setAddServiceError("");
     try {
-      const added = addServiceToQueue({
-        queueId: entry.id,
+      const key = requestKey || globalThis.crypto.randomUUID();
+      setRequestKey(key);
+      const result = await requestServiceEdit({
+        bookingId: entry.bookingId,
         serviceIds: selectedServices,
+        payerName,
+        requestKey: key,
       });
-      if (!added)
-        throw new Error(
-          "Could not add the selected service. Refresh the page and try again.",
-        );
+      if (result.unchanged) await refreshBookings();
+      if (result.edit) setServiceEdits((items) => [result.edit, ...items.filter((item) => item.id !== result.edit.id)]);
+      setServiceEditSuccess(servicePriceDelta > 0
+        ? "Payment confirmed and services updated."
+        : servicePriceDelta < 0
+          ? "Refund and service change request sent to the shop."
+          : "Services updated.");
       setSelectedServices([]);
       setAdding(false);
+      setPayerName("");
+      setRequestKey("");
+      await refreshBookings();
     } catch (error) {
-      setAddServiceError(error.message || "Could not add service.");
+      setAddServiceError(error.response?.data?.message || error.message || "Could not submit service edit.");
     } finally {
       setPaying(false);
     }
@@ -343,7 +404,18 @@ export default function MyQueue() {
           </div>
           <div>
             <dt className="label">Services</dt>
-            <dd className="font-serif text-2xl">{serviceNames}</dd>
+            <dd className="mt-2 space-y-1">
+              {services.map((service) => (
+                <div key={service.id} className="flex justify-between gap-3 text-sm">
+                  <span>{service.name} · {service.duration} min</span>
+                  <span>₹{Number(service.price).toFixed(2)}</span>
+                </div>
+              ))}
+              <div className="flex justify-between border-t border-khaki pt-2 font-medium">
+                <span>Total · {entry.serviceDuration || services.reduce((sum, service) => sum + Number(service.duration || 0), 0)} min</span>
+                <span>₹{Number(entry.paymentAmount || 0).toFixed(2)}</span>
+              </div>
+            </dd>
           </div>
           <div>
             <dt className="label">Estimated wait</dt>
@@ -411,58 +483,82 @@ export default function MyQueue() {
           </div>
         )}
 
-        {addable.length > 0 && activeStatuses.includes(entry.status) && (
+        {serviceEdits.filter((edit) => edit.bookingId === entry.bookingId).map((edit) => (
+          <div key={edit.id} className="border border-khaki p-4 mt-5 text-sm">
+            <b>Service edit · {edit.status.replaceAll("_", " ")}</b>
+            <p className="mt-1">{edit.oldServices.map((service) => service.name).join(" + ")} → {edit.requestedServices.map((service) => service.name).join(" + ")}</p>
+            <p className="mt-1">Proposed total ₹{Number(edit.proposedTotal || 0).toFixed(2)} · {edit.proposedDuration} min</p>
+            {edit.status === "payment_review" && <p className="text-coffee/70 mt-1">Additional payment ₹{edit.amountDelta.toFixed(2)} submitted; waiting for the shop to verify the UPI reference.</p>}
+            {edit.status === "refund_review" && <p className="text-coffee/70 mt-1">Refund of ₹{Math.abs(edit.amountDelta).toFixed(2)} requested; the shop must process and confirm it before services change.</p>}
+            {edit.status === "applied" && <p className="text-olive mt-1">Updated services are reflected in your booking.</p>}
+            {edit.status === "rejected" && <p className="text-rose mt-1">The shop did not approve this edit. Contact the shop if you sent an extra payment.</p>}
+          </div>
+        ))}
+
+        {["Waiting", "Your Turn"].includes(entry.status) && entry.bookingId && !pendingServiceEdit && editableServices.length > 0 && (
           <div className="border-t border-khaki mt-10 pt-6">
-            <button className="btn-ghost" onClick={() => setAdding(!adding)}>
-              <Plus size={16} />
-              Add Service
-            </button>
-            {adding && (
-              <div className="mt-4 border border-khaki p-4 space-y-2">
-                {addable.map((s) => (
-                  <label
-                    key={s.id}
-                    className="flex justify-between border-b border-khaki py-3"
-                  >
-                    <span>
-                      <input
-                        type="checkbox"
-                        className="mr-3"
-                        checked={selectedServices.includes(s.id)}
-                        onChange={(e) =>
-                          setSelectedServices(
-                            e.target.checked
-                              ? [...selectedServices, s.id]
-                              : selectedServices.filter((x) => x !== s.id),
-                          )
-                        }
-                      />
-                      {s.name}
-                    </span>
-                    <span>
-                      ₹{s.price} · {s.duration} min
-                    </span>
-                  </label>
-                ))}
-                <button
-                  type="button"
-                  className="btn mt-3"
-                  disabled={!selectedServices.length || paying}
-                  onClick={addSelected}
-                >
-                  {paying
-                    ? "Processing payment..."
-                    : `Pay ₹${addable.filter((s) => selectedServices.includes(s.id)).reduce((n, s) => n + Number(s.price), 0)}`}
-                </button>
-                {addServiceError && (
-                  <p className="text-sm text-rose mt-2">{addServiceError}</p>
+            {!adding ? (
+              <button className="btn-ghost" onClick={() => {
+                setSelectedServices(currentServiceIds);
+                setAddServiceError("");
+                setAdding(true);
+              }}>
+                <Plus size={16} /> Edit Services
+              </button>
+            ) : (
+              <div className="mt-2 border border-khaki p-4 space-y-2">
+                <h3 className="text-xl">Edit services while waiting</h3>
+                <p className="text-sm text-coffee/70">Keep at least one service. The shop and barber will verify availability before applying your selection.</p>
+                {availabilityLoading && <p className="text-sm text-coffee/70">Checking service availability…</p>}
+                {!availabilityLoading && !availabilityError && editableServices.map((service) => {
+                  const id = String(service.id);
+                  return (
+                    <label key={service.id} className="flex justify-between gap-3 border-b border-khaki py-3">
+                      <span>
+                        <input type="checkbox" className="mr-3" checked={selectedServices.includes(id)}
+                          disabled={availabilityLoading}
+                          onChange={(event) => {
+                            setRequestKey("");
+                            setSelectedServices((items) => event.target.checked
+                              ? [...new Set([...items, id])]
+                              : items.filter((item) => item !== id));
+                          }} />
+                        {service.name}
+                      </span>
+                      <span>₹{Number(service.price).toFixed(2)} · {service.duration} min</span>
+                    </label>
+                  );
+                })}
+                {!availabilityLoading && !availabilityError && editableServices.length === 0 &&
+                  <p className="text-sm text-coffee/70 py-3">No services are available for this barber on the booking date.</p>}
+                <div className="flex justify-between text-sm pt-2">
+                  <span>Updated estimate · {desiredServiceRows.reduce((sum, service) => sum + Number(service.duration || 0), 0)} min</span>
+                  <span>₹{proposedTotal.toFixed(2)}</span>
+                </div>
+                {servicePriceDelta > 0 && (
+                  <div className="space-y-2 pt-2">
+                    <p className="text-sm">Pay the additional ₹{servicePriceDelta.toFixed(2)} using the shop UPI QR.</p>
+                    {shop.upiQrUrl ? <img src={shop.upiQrUrl} alt={shop.name + " UPI QR"} className="w-40 border border-khaki" /> : <p className="text-rose text-sm">This shop has no UPI QR configured.</p>}
+                    <input className="input" required placeholder="Payer name" value={payerName} onChange={(event) => setPayerName(event.target.value)} />
+                  </div>
                 )}
+                {servicePriceDelta < 0 && <p className="text-sm pt-2">You are requesting a ₹{Math.abs(servicePriceDelta).toFixed(2)} refund. Services remain unchanged until the shop processes the refund outside this app and confirms it.</p>}
+                {servicePriceDelta === 0 && <p className="text-sm pt-2">There is no payment difference. Services update after the change is saved.</p>}
+                {availabilityError && <p className="text-sm text-rose" role="alert">{availabilityError}</p>}
+                {addServiceError && <p className="text-sm text-rose" role="alert">{addServiceError}</p>}
+                <div className="flex gap-2 pt-2">
+                  {servicePriceDelta <= 0 && <button type="button" className="btn-ghost" disabled={paying} onClick={() => { setAdding(false); setAddServiceError(""); setSelectedServices([]); }}>Cancel</button>}
+                  <button type="button" className={`btn ${servicePriceDelta > 0 ? "w-full" : ""}`} disabled={!selectedServices.length || (selectedServices.length === currentServiceIds.length && currentServiceIds.every((id) => selectedServices.includes(id))) || paying || availabilityLoading || Boolean(availabilityError) || (servicePriceDelta > 0 && !shop.upiQrUrl)} onClick={submitServiceEdit}>
+                    {paying ? "Confirming..." : servicePriceDelta > 0 ? "I have paid" : servicePriceDelta < 0 ? "Request refund & edit" : "Save services"}
+                  </button>
+                </div>
               </div>
             )}
+            {!adding && serviceEditSuccess && <p className="text-sm text-green-700 mt-3" role="status">{serviceEditSuccess}</p>}
           </div>
         )}
 
-        {entry.status === "Waiting" && (
+        {entry.status === "Waiting" && !pendingServiceEdit && (
           <div className="flex flex-wrap gap-3 mt-8">
             <button
               className="btn-ghost !border-rose !text-rose hover:!bg-rose hover:!text-cream"
@@ -471,6 +567,9 @@ export default function MyQueue() {
               Cancel booking
             </button>
           </div>
+        )}
+        {entry.status === "Waiting" && pendingServiceEdit && (
+          <p className="text-sm text-coffee/70 mt-8">Resolve the pending service payment or refund before cancelling this booking.</p>
         )}
       </section>
     </div>

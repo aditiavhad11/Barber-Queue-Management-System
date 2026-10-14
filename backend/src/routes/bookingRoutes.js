@@ -17,6 +17,10 @@ import {
   listQueue,
   setQueueStatus,
   deleteBookingHistory,
+  requestServiceEdit,
+  listMyServiceEdits,
+  listPendingServiceEdits,
+  resolveServiceEdit,
 } from "../controllers/bookingController.js";
 
 const router = Router();
@@ -58,6 +62,10 @@ router.get(
   requireRole("customer", "owner", "shop", "co_owner"),
   listQueue,
 );
+router.get("/service-edits/mine", auth, requireRole("customer"), listMyServiceEdits);
+router.get("/service-edits/pending", auth, requireRole("owner", "shop", "co_owner"), listPendingServiceEdits);
+router.patch("/service-edits/:editId", auth, requireRole("owner", "shop", "co_owner"), resolveServiceEdit);
+router.post("/:id/service-edits", auth, requireRole("customer"), requestServiceEdit);
 router.patch(
   "/:id/queue-status",
   auth,
