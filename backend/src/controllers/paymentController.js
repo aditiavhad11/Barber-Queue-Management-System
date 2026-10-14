@@ -171,7 +171,14 @@ async function validateSelection(
   const part = (type) => istParts.find((item) => item.type === type)?.value;
   const today = `${part("year")}-${part("month")}-${part("day")}`;
   const currentTime = `${part("hour")}:${part("minute")}`;
-  if (avail.isOpen === false) {
+  const emergencyEnd = avail.temporaryClosure?.endAt
+    ? new Date(avail.temporaryClosure.endAt)
+    : null;
+  const emergencyExpired =
+    avail.emergencyClosed &&
+    emergencyEnd &&
+    emergencyEnd <= new Date();
+  if (avail.isOpen === false && !emergencyExpired) {
     throw Object.assign(new Error("This shop is currently closed."), {
       status: 409,
     });
@@ -212,10 +219,20 @@ async function validateSelection(
   }
   const tc = avail?.temporaryClosure;
   if (tc && tc.active) {
-    const today = new Date().toISOString().slice(0, 10);
+    if (tc.endAt && new Date(tc.endAt) <= new Date()) {
+      // The server-side timestamp is authoritative; an expired hour closure
+      // must not keep blocking new bookings because the UI was not refreshed.
+    } else {
     const start = tc.startDate || today;
     const end = tc.endDate || "";
-    if (today >= start && (!end || today <= end)) {
+    const hourClosureApplies =
+      tc.startAt &&
+      bookingDate === String(tc.startAt).slice(0, 10) &&
+      new Date(tc.startAt) <= new Date() &&
+      (!tc.endAt || new Date() < new Date(tc.endAt));
+    const dayClosureApplies =
+      !tc.startAt && bookingDate >= start && (!end || bookingDate <= end);
+    if (hourClosureApplies || dayClosureApplies) {
       const reasonPart = tc.reason ? ` (${tc.reason})` : "";
       const untilPart = end ? ` until ${end}` : "";
       throw Object.assign(
@@ -224,6 +241,7 @@ async function validateSelection(
         ),
         { status: 409 },
       );
+    }
     }
   }
   assertAnnualScheduleAllowsBooking(avail, bookingDate);

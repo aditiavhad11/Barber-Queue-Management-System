@@ -5,6 +5,8 @@ import {
   listMine,
   createShop,
   updateShop,
+  listEmergencyClosures,
+  endEmergencyClosure,
   updateStatus,
   resubmit,
   listAdmin,
@@ -33,6 +35,13 @@ router.get("/mine", auth, requireRole("owner"), listMine);
 router.post("/", auth, requireRole("owner"), createShop);
 
 router.patch("/:id", auth, requireRole("owner"), updateShop);
+router.get("/:id/emergency-closures", auth, requireRole("owner"), listEmergencyClosures);
+router.patch(
+  "/:id/emergency-closures/:closureId/end",
+  auth,
+  requireRole("owner"),
+  endEmergencyClosure,
+);
 
 router.post(
   "/:id/services",
