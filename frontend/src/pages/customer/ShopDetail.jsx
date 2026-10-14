@@ -228,9 +228,23 @@ export default function ShopDetail() {
                     .filter(Boolean)
                     .join(", ")}
                 </p>
-                <p className="mt-1">
-                  {q.length} in queue · ~{wait} min
-                </p>
+                <div className="mt-3 border-t border-khaki pt-3">
+                  <p className="text-xs uppercase tracking-wide text-coffee/60">
+                    Live queue estimate
+                  </p>
+                  <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1 mt-1">
+                    <p className="font-serif text-2xl text-coffee">
+                      {q.length}{" "}
+                      <span className="font-sans text-sm font-medium">
+                        customer{q.length === 1 ? "" : "s"} in queue
+                      </span>
+                    </p>
+                    <p className="font-serif text-2xl text-coffee">
+                      ~{wait}{" "}
+                      <span className="font-sans text-sm font-medium">min wait</span>
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
           );
