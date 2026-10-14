@@ -32,6 +32,7 @@ import {
   MessageSquareWarning,
   RotateCcw,
   Sparkles,
+  CalendarClock,
 } from "lucide-react";
 import { useAuth } from "../hooks/useAuth";
 import { useOwner } from "../hooks/useOwnerStore";
@@ -61,6 +62,7 @@ const groups = [
     "Operations",
     [
       ["/owner/queue", "Queue", ListOrdered],
+      ["/owner/prebookings", "Prebookings", CalendarClock],
       ["/owner/barbers", "Barbers", Scissors],
       ["/owner/services", "Services", Tag],
       ["/owner/all-services", "All Shop Services", Layers3],

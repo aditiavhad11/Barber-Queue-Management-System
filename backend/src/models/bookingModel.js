@@ -105,6 +105,12 @@ export async function hydrateBookings(rows) {
       acceptedAt: iso(row.accepted_at),
       queueStatus:
         row.queue_status || (row.status === "accepted" ? "Waiting" : null),
+      isPrebooking:
+        row.status === "accepted" &&
+        row.booking_date_string &&
+        row.booking_date_string !== new Intl.DateTimeFormat("en-CA", {
+          timeZone: "Asia/Kolkata",
+        }).format(new Date()),
       skippedAt: iso(row.skipped_at),
       skipCount: Number(row.skip_count || 0),
       completedAt: iso(row.completed_at),

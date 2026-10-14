@@ -32,6 +32,22 @@ export const getTemporaryClosure = (shop, date = new Date()) => {
   if (!tc || !tc.active) return { isClosed: false };
 
   const current = toLocalDateString(date);
+  if (tc.startAt || tc.endAt) {
+    const start = tc.startAt ? new Date(tc.startAt) : null;
+    const end = tc.endAt ? new Date(tc.endAt) : null;
+    if (start && date < start)
+      return { isClosed: false, upcoming: true, startAt: tc.startAt, endAt: tc.endAt, reason: String(tc.reason || "").trim() };
+    if (end && date >= end)
+      return { isClosed: false, expired: true, startAt: tc.startAt, endAt: tc.endAt };
+    return {
+      isClosed: true,
+      startAt: tc.startAt,
+      endAt: tc.endAt,
+      startDate: tc.startDate || tc.startAt?.slice(0, 10),
+      endDate: tc.endDate || tc.endAt?.slice(0, 10),
+      reason: String(tc.reason || "").trim(),
+    };
+  }
   const start = tc.startDate || current;
   const end = tc.endDate || "";
 
@@ -111,6 +127,11 @@ export const openDaysOf = (shop) =>
 export const isClosedToday = (shop, date = new Date()) =>
   !openDaysOf(shop).includes(JS_DAY[date.getDay()]);
 
+const tcEnded = (shop, date = new Date()) => {
+  const end = shop?.availability?.temporaryClosure?.endAt;
+  return Boolean(end && new Date(end) <= date);
+};
+
 export const isShopOpenNow = (shop, date = new Date()) => {
   if (getTemporaryClosure(shop, date).isClosed) return false;
   const annual = annualScheduleForDate(shop, date);
@@ -123,7 +144,10 @@ export const isShopOpenNow = (shop, date = new Date()) => {
         : shop?.isOpen !== undefined
           ? shop.isOpen
           : true;
-  if (!Boolean(openFlag) || isClosedToday(shop, date)) return false;
+  const expiredEmergency =
+    shop?.availability?.emergencyClosed &&
+    tcEnded(shop, date);
+  if ((!openFlag && !expiredEmergency) || isClosedToday(shop, date)) return false;
 
   const d = JS_DAY[date.getDay()];
   const sched = scheduleOf(shop)[d];

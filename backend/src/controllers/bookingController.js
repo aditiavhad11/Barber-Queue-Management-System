@@ -376,6 +376,14 @@ const scope = (req) =>
     ? { sql: "s.id=?", params: [req.user.shopId || req.user.sub] }
     : { sql: "s.owner_id=?", params: [req.user.sub] };
 
+const localDateKey = (date = new Date()) =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+
 export async function listMine(req, res) {
   const rows = await findBookings(
     "b.customer_id=? AND b.status IN ('payment_submitted','accepted','rejected')",
@@ -428,6 +436,32 @@ export async function listPending(req, res) {
   res.json(await hydrateBookings(rows));
 }
 
+export async function listPrebookings(req, res) {
+  const { sql, params } = scope(req);
+  const date = String(req.query.date || localDateKey());
+  const pageSize = Math.min(30, Math.max(10, Number(req.query.pageSize) || 10));
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const offset = (page - 1) * pageSize;
+  const [countRows] = await pool.query(
+    `SELECT COUNT(*) AS total FROM payment_bookings b
+     JOIN shops s ON s.id=b.shop_id
+     WHERE b.status='accepted' AND b.queue_status='Prebooked'
+       AND b.booking_date=? AND ${sql}`,
+    [date, ...params],
+  );
+  const rows = await findBookings(
+    `b.status='accepted' AND b.queue_status='Prebooked' AND b.booking_date=? AND ${sql}`,
+    [date, ...params],
+    `ORDER BY b.booking_date ASC, b.accepted_at ASC LIMIT ${pageSize} OFFSET ${offset}`,
+  );
+  res.json({
+    items: await hydrateBookings(rows),
+    total: Number(countRows[0]?.total || 0),
+    page,
+    pageSize,
+  });
+}
+
 async function loadOwned(req) {
   const { sql, params } = scope(req);
   const rows = await findBookings(
@@ -475,9 +509,17 @@ export async function acceptBooking(req, res) {
     try {
       const [result] = await pool.query(
         `UPDATE payment_bookings
-         SET status='accepted', queue_status='Waiting', token=?, queue_id=?, payment_reference=?, accepted_at=NOW()
+         SET status='accepted',
+             queue_status=IF(booking_date=?, 'Waiting', 'Prebooked'),
+             token=?, queue_id=?, payment_reference=?, accepted_at=NOW()
          WHERE id=? AND status='payment_submitted'`,
-        [tokenToUse, `q-${booking.id}`, `PAY-${booking.id}`, booking.id],
+        [
+          localDateKey(),
+          tokenToUse,
+          `q-${booking.id}`,
+          `PAY-${booking.id}`,
+          booking.id,
+        ],
       );
 
       if (!result.affectedRows) {
@@ -512,12 +554,43 @@ export async function acceptBooking(req, res) {
     userId: booking.customerId,
     tone: "ok",
     refId: booking.id,
-    text: `${booking.shopName} accepted your payment. You are in the queue, token #${token}.`,
+    text:
+      booking.isPrebooking
+        ? `${booking.shopName} accepted your payment for ${booking.bookingDate}.`
+        : `${booking.shopName} accepted your payment. You are in the queue, token #${token}.`,
   });
 
   const [fresh] = await hydrateBookings(
     await findBookings("b.id=?", [booking.id], "LIMIT 1"),
   );
+  res.json({ booking: fresh });
+}
+
+export async function takePrebooking(req, res) {
+  const booking = await loadOwned(req);
+  if (
+    !booking ||
+    booking.status !== "accepted" ||
+    booking.queueStatus !== "Prebooked"
+  )
+    return res.status(404).json({ message: "Prebooking not found." });
+  if (booking.bookingDate !== localDateKey())
+    return res
+      .status(409)
+      .json({ message: "Only today's prebookings can be added to the queue." });
+  await pool.query(
+    "UPDATE payment_bookings SET queue_status='Waiting', skipped_at=NOW() WHERE id=? AND status='accepted' AND queue_status='Prebooked'",
+    [booking.id],
+  );
+  const [fresh] = await hydrateBookings(
+    await findBookings("b.id=?", [booking.id], "LIMIT 1"),
+  );
+  await addNotification({
+    userId: booking.customerId,
+    tone: "ok",
+    refId: booking.id,
+    text: `${booking.shopName} added your prebooking for today to the queue.`,
+  });
   res.json({ booking: fresh });
 }
 
@@ -654,7 +727,7 @@ export async function listQueue(req, res) {
 
   if (isCustomer) {
     const ownRows = await findBookings(
-      "b.status='accepted' AND b.customer_id=?",
+      "b.status='accepted' AND b.customer_id=? AND b.queue_status <> 'Prebooked'",
       [req.user.sub],
       "ORDER BY COALESCE(b.skipped_at, b.accepted_at) ASC LIMIT 100",
     );
@@ -680,7 +753,7 @@ export async function listQueue(req, res) {
     const ownSql = ownIds.map(() => "?").join(",");
 
     rows = await findBookings(
-      `b.status='accepted' AND (
+      `b.status='accepted' AND b.queue_status <> 'Prebooked' AND (
         b.id IN (${ownSql})
         OR (
           b.queue_status IN ('Waiting','Your Turn','In Service')
@@ -721,7 +794,7 @@ export async function listQueue(req, res) {
   } else {
     const { sql, params } = scope(req);
     rows = await findBookings(
-      `b.status='accepted' AND ${sql}`,
+      `b.status='accepted' AND b.queue_status <> 'Prebooked' AND ${sql}`,
       params,
       "ORDER BY COALESCE(b.skipped_at, b.accepted_at) ASC, b.accepted_at ASC, b.id ASC LIMIT 500",
     );

@@ -250,6 +250,31 @@ CREATE TABLE IF NOT EXISTS notifications (
   INDEX idx_notification_shop (shop_id, created_at)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS emergency_closures (
+  id CHAR(36) PRIMARY KEY,
+  shop_id CHAR(36) NOT NULL,
+  closure_type ENUM('hours','days') NOT NULL DEFAULT 'days',
+  start_at DATETIME NOT NULL,
+  end_at DATETIME NULL,
+  reason VARCHAR(255) NULL,
+  status ENUM('active','ended','expired') NOT NULL DEFAULT 'active',
+  created_by CHAR(36) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ended_at DATETIME NULL,
+  FOREIGN KEY (shop_id) REFERENCES shops(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
+  INDEX idx_emergency_closure_shop_period (shop_id, start_at, end_at, status)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS emergency_closure_notifications (
+  closure_id CHAR(36) NOT NULL,
+  booking_id CHAR(36) NOT NULL,
+  sent_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (closure_id, booking_id),
+  FOREIGN KEY (closure_id) REFERENCES emergency_closures(id) ON DELETE CASCADE,
+  FOREIGN KEY (booking_id) REFERENCES payment_bookings(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS audit_logs (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   actor_id CHAR(36),

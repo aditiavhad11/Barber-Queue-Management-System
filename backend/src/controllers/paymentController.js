@@ -68,13 +68,12 @@ const localTimeKey = (date = new Date()) => {
   return `${pick("hour")}:${pick("minute")}`;
 };
 
-function assertAnnualScheduleAllowsBooking(availability) {
+function assertAnnualScheduleAllowsBooking(availability, bookingDate) {
   const schedules =
     availability?.annualSchedules && typeof availability.annualSchedules === "object"
       ? availability.annualSchedules
       : {};
-  const today = localDateKey();
-  const item = schedules[today];
+  const item = schedules[bookingDate];
   if (!item) return;
   const type = String(item.type || "closed");
   const note = String(item.note || "").trim();
@@ -84,7 +83,7 @@ function assertAnnualScheduleAllowsBooking(availability) {
       status: 409,
     });
   }
-  if (["half_day", "special_hours"].includes(type)) {
+  if (["half_day", "special_hours"].includes(type) && bookingDate === localDateKey()) {
     const open = String(item.open || "09:00").slice(0, 5);
     const close = String(item.close || "21:00").slice(0, 5);
     const now = localTimeKey();
@@ -172,19 +171,31 @@ async function validateSelection(
   const part = (type) => istParts.find((item) => item.type === type)?.value;
   const today = `${part("year")}-${part("month")}-${part("day")}`;
   const currentTime = `${part("hour")}:${part("minute")}`;
-  if (avail.isOpen === false) {
+  const emergencyEnd = avail.temporaryClosure?.endAt
+    ? new Date(avail.temporaryClosure.endAt)
+    : null;
+  const emergencyExpired =
+    avail.emergencyClosed &&
+    emergencyEnd &&
+    emergencyEnd <= new Date();
+  if (avail.isOpen === false && !emergencyExpired) {
     throw Object.assign(new Error("This shop is currently closed."), {
       status: 409,
     });
   }
+  const bookingWeekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Kolkata",
+    weekday: "short",
+  }).format(new Date(`${bookingDate}T12:00:00Z`));
+  const annual = avail.annualSchedules?.[bookingDate];
+  const schedule = avail.schedule?.[bookingWeekday];
+  if (annual?.type === "closed" || (!annual && schedule?.closed)) {
+    throw Object.assign(new Error("This shop is closed on the selected booking date."), {
+      status: 409,
+    });
+  }
   if (bookingDate === today) {
-    const weekday = new Intl.DateTimeFormat("en-US", {
-      timeZone: "Asia/Kolkata",
-      weekday: "short",
-    }).format(now);
-    const schedule = avail.schedule?.[weekday];
     const override = avail.operationalHours;
-    const annual = avail.annualSchedules?.[bookingDate];
     const shifts = override?.enabled &&
       (!override.date || override.date === today)
       ? [{ open: override.open, close: override.close }]
@@ -208,10 +219,20 @@ async function validateSelection(
   }
   const tc = avail?.temporaryClosure;
   if (tc && tc.active) {
-    const today = new Date().toISOString().slice(0, 10);
+    if (tc.endAt && new Date(tc.endAt) <= new Date()) {
+      // The server-side timestamp is authoritative; an expired hour closure
+      // must not keep blocking new bookings because the UI was not refreshed.
+    } else {
     const start = tc.startDate || today;
     const end = tc.endDate || "";
-    if (today >= start && (!end || today <= end)) {
+    const hourClosureApplies =
+      tc.startAt &&
+      bookingDate === String(tc.startAt).slice(0, 10) &&
+      new Date(tc.startAt) <= new Date() &&
+      (!tc.endAt || new Date() < new Date(tc.endAt));
+    const dayClosureApplies =
+      !tc.startAt && bookingDate >= start && (!end || bookingDate <= end);
+    if (hourClosureApplies || dayClosureApplies) {
       const reasonPart = tc.reason ? ` (${tc.reason})` : "";
       const untilPart = end ? ` until ${end}` : "";
       throw Object.assign(
@@ -221,8 +242,9 @@ async function validateSelection(
         { status: 409 },
       );
     }
+    }
   }
-  assertAnnualScheduleAllowsBooking(avail);
+  assertAnnualScheduleAllowsBooking(avail, bookingDate);
 
   if (!shops[0].upi_qr_url)
     throw Object.assign(new Error("This shop can't take bookings yet."), {

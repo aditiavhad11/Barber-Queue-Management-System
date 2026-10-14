@@ -187,7 +187,7 @@ export default function Queue() {
               key={b.id}
               className="py-4 border-t border-khaki mt-4 flex flex-wrap items-center justify-between gap-3"
             >
-              <div className="text-sm">
+              <div className="text-md">
                 <b className="text-base">
                   {b.beneficiary?.isSelf === false
                     ? b.beneficiary.name
@@ -203,11 +203,19 @@ export default function Queue() {
                   {b.barberName} · {b.durationMinutes} min · ₹{b.amount}
                 </p>
                 {b.bookingDate && (
-                  <p className="text-xs text-hint mt-1">
+                  <p className="text-md text-black mt-1">
                     Booking date: {b.bookingDate}
+                    {b.bookingDate !==
+                      new Intl.DateTimeFormat("en-CA", {
+                        timeZone: "Asia/Kolkata",
+                      }).format(new Date()) && (
+                      <span className="ml-2 text-black  text-md">
+                        · PREBOOKING
+                      </span>
+                    )}
                   </p>
                 )}
-                <p className="text-xs text-hint mt-1">
+                <p className="text-md text-hint mt-1">
                   Submitted{" "}
                   {b.paymentSubmittedAt
                     ? new Date(b.paymentSubmittedAt).toLocaleTimeString(

@@ -58,6 +58,28 @@ const notOwned = (res) =>
     .status(404)
     .json({ message: "Shop not found or not owned by this account." });
 
+const toUtcDateTime = (value) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 19).replace("T", " ");
+};
+
+const dateAfter = (value) => {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+};
+
+const closurePeriod = (closure) => {
+  const start = closure?.startAt || `${closure?.startDate || ""}T00:00:00+05:30`;
+  const end =
+    closure?.endAt ||
+    (closure?.endDate
+      ? `${dateAfter(closure.endDate)}T00:00:00+05:30`
+      : null);
+  return { start: toUtcDateTime(start), end: end ? toUtcDateTime(end) : null };
+};
+
 /** Validates the per-day weekly shifts in availability.schedule.
  *  Returns an error string or "" if valid.
  */
@@ -327,7 +349,18 @@ async function hydrateShops(shopRows) {
             lng: Number(row.longitude),
             confirmed: true,
           },
-    availability: parseJson(row.availability_json),
+    availability: (() => {
+      const availability = parseJson(row.availability_json);
+      const end = availability.temporaryClosure?.endAt;
+      if (
+        availability.emergencyClosed &&
+        end &&
+        new Date(end) <= new Date()
+      ) {
+        availability.isOpen = true;
+      }
+      return availability;
+    })(),
     policy: parseJson(row.policies_json),
     upiQrUrl: row.upi_qr_url || "",
     photos: (photosByShop.get(row.id) || []).map((p) => ({
@@ -600,10 +633,29 @@ export async function updateShop(req, res) {
     b.availability !== undefined ? b.availability || {} : currentAvailability;
   const previousClosure = currentAvailability.temporaryClosure;
   const nextClosure = nextAvailability.temporaryClosure;
+  let closureId = nextClosure?.id || null;
+  const period = closurePeriod(nextClosure);
+  if (nextClosure?.active) {
+    if (!period.start || !period.end || new Date(period.end) <= new Date(period.start)) {
+      return res.status(400).json({
+        message: "Closure start and reopening time must be valid, and reopening must be after the start.",
+      });
+    }
+    const [duplicates] = await pool.query(
+      `SELECT id, closure_type, start_at, end_at, reason FROM emergency_closures
+       WHERE shop_id=? AND start_at=? AND end_at=? AND status='active' LIMIT 1`,
+      [shopId, period.start, period.end],
+    );
+    if (duplicates.length && duplicates[0].id !== closureId) {
+      return res.status(409).json({ message: "An identical emergency closure is already active." });
+    }
+    closureId ||= crypto.randomUUID();
+    nextAvailability.temporaryClosure = { ...nextClosure, id: closureId };
+  }
   const closureStarted =
     nextClosure?.active &&
-    nextClosure.startDate <= new Date().toISOString().slice(0, 10) &&
-    !(previousClosure?.active && previousClosure.startDate === nextClosure.startDate);
+    new Date(period.start) <= new Date() &&
+    !(previousClosure?.active && previousClosure.id === closureId);
   const closureEnded =
     previousClosure?.active && (!nextClosure || nextClosure.active !== true);
   let closureBookingIds = [];
@@ -624,6 +676,11 @@ export async function updateShop(req, res) {
       ...nextAvailability,
       isOpen: true,
       emergencyClosed: false,
+    };
+  } else if (nextClosure?.active) {
+    nextAvailability = {
+      ...nextAvailability,
+      isOpen: currentAvailability.isOpen !== false,
     };
   }
 
@@ -686,6 +743,24 @@ export async function updateShop(req, res) {
   try {
     await connection.beginTransaction();
 
+    if (nextClosure?.active) {
+      await connection.query(
+        `INSERT INTO emergency_closures
+           (id, shop_id, closure_type, start_at, end_at, reason, status, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, 'active', ?)
+         ON DUPLICATE KEY UPDATE reason=VALUES(reason), end_at=VALUES(end_at)`,
+        [
+          closureId,
+          shopId,
+          nextClosure.type === "hours" ? "hours" : "days",
+          period.start,
+          period.end,
+          String(nextClosure.reason || "").trim() || null,
+          req.user.sub,
+        ],
+      );
+    }
+
     if (fields.length) {
       await connection.query(
         `UPDATE shops SET ${fields.join(", ")} WHERE id=? AND owner_id=?`,
@@ -714,21 +789,31 @@ export async function updateShop(req, res) {
         startDate: nextClosure.startDate,
         endDate: nextClosure.endDate || null,
       });
+      const startDate = nextClosure.startDate || localDateKey(new Date(period.start));
+      const endDate = nextClosure.endDate || localDateKey(new Date(period.end));
       const [affectedBookings] = await connection.query(
         `SELECT id, customer_id, token
          FROM payment_bookings
          WHERE shop_id=? AND status='accepted'
-           AND queue_status IN ('Waiting','Your Turn','In Service')
+           AND (
+             queue_status IN ('Waiting','Your Turn','In Service','Prebooked')
+             OR (booking_date BETWEEN ? AND ?)
+           )
+           AND (booking_date IS NULL OR booking_date BETWEEN ? AND ?)
          FOR UPDATE`,
-        [shopId],
+        [shopId, startDate, endDate, startDate, endDate],
       );
       closureBookingIds = affectedBookings.map((booking) => booking.id);
       await connection.query(
         `UPDATE payment_bookings
          SET queue_status='Emergency Closed', closure_choice=NULL
          WHERE shop_id=? AND status='accepted'
-           AND queue_status IN ('Waiting','Your Turn','In Service')`,
-        [shopId],
+           AND (
+             queue_status IN ('Waiting','Your Turn','In Service','Prebooked')
+             OR (booking_date BETWEEN ? AND ?)
+           )
+           AND (booking_date IS NULL OR booking_date BETWEEN ? AND ?)`,
+        [shopId, startDate, endDate, startDate, endDate],
       );
       if (affectedBookings.length) {
         const notificationValues = affectedBookings.flatMap((booking) => [
@@ -744,6 +829,13 @@ export async function updateShop(req, res) {
            VALUES ${affectedBookings.map(() => "(UUID(), ?, ?, ?, ?, ?)").join(", ")}`,
           notificationValues,
         );
+        if (closureBookingIds.length) {
+          await connection.query(
+            `INSERT IGNORE INTO emergency_closure_notifications (closure_id, booking_id)
+             VALUES ${closureBookingIds.map(() => "(?, ?)").join(", ")}`,
+            closureBookingIds.flatMap((bookingId) => [closureId, bookingId]),
+          );
+        }
       }
       await connection.query(
         `INSERT INTO audit_logs
@@ -782,7 +874,10 @@ export async function updateShop(req, res) {
       if (closureBookingIds.length) {
         const job = await enqueueEmergencyClosureNotifications(shopId, {
           ...nextClosure,
+          id: closureId,
           bookingIds: closureBookingIds,
+          startAt: period.start,
+          endAt: period.end,
         });
         console.info("[emergency-closure] email job queued", {
           shopId,
@@ -794,6 +889,12 @@ export async function updateShop(req, res) {
           shopId,
         });
       }
+      if (closureEnded && previousClosure?.id) {
+        await pool.query(
+          "UPDATE emergency_closures SET status='ended', ended_at=NOW() WHERE id=? AND shop_id=? AND status='active'",
+          [previousClosure.id, shopId],
+        );
+      }
     } catch (error) {
       console.error(
         "[emergency-closure] could not queue asynchronous emails:",
@@ -802,6 +903,58 @@ export async function updateShop(req, res) {
     }
   }
   res.json(await hydrateShop(rows[0]));
+}
+
+export async function listEmergencyClosures(req, res) {
+  if (!(await ownsShop(req, req.params.id))) return notOwned(res);
+  const [rows] = await pool.query(
+    `SELECT id, closure_type AS type, start_at AS startAt, end_at AS endAt,
+            reason, status, created_at AS createdAt, ended_at AS endedAt
+     FROM emergency_closures
+     WHERE shop_id=?
+     ORDER BY start_at DESC LIMIT 100`,
+    [req.params.id],
+  );
+  res.json(rows);
+}
+
+export async function endEmergencyClosure(req, res) {
+  if (!(await ownsShop(req, req.params.id))) return notOwned(res);
+  const [result] = await pool.query(
+    "UPDATE emergency_closures SET status='ended', ended_at=NOW() WHERE id=? AND shop_id=? AND status='active'",
+    [req.params.closureId, req.params.id],
+  );
+  if (!result.affectedRows)
+    return res.status(404).json({ message: "Active emergency closure not found." });
+  const [[other]] = await pool.query(
+    `SELECT id FROM emergency_closures
+     WHERE shop_id=? AND status='active' AND id<>?
+       AND start_at<=NOW() AND (end_at IS NULL OR end_at>NOW())
+     LIMIT 1`,
+    [req.params.id, req.params.closureId],
+  );
+  const [[shopRow]] = await pool.query(
+    "SELECT availability_json FROM shops WHERE id=? AND owner_id=? LIMIT 1",
+    [req.params.id, req.user.sub],
+  );
+  const availability = parseJson(shopRow?.availability_json, {});
+  availability.temporaryClosure = other
+    ? {
+        id: other.id,
+        active: true,
+        type: other.closure_type,
+        startAt: new Date(other.start_at).toISOString(),
+        endAt: other.end_at ? new Date(other.end_at).toISOString() : null,
+        reason: other.reason || "",
+      }
+    : null;
+  availability.isOpen = Boolean(!other);
+  availability.emergencyClosed = Boolean(other);
+  await pool.query(
+    "UPDATE shops SET availability_json=? WHERE id=? AND owner_id=?",
+    [JSON.stringify(availability), req.params.id, req.user.sub],
+  );
+  res.json({ ok: true });
 }
 
 export async function updateStatus(req, res) {

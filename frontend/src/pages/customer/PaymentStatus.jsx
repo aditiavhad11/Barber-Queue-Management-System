@@ -77,12 +77,15 @@ export default function PaymentStatus() {
   }
 
   const accepted = booking.status === "accepted";
+  const prebooked = accepted && booking.isPrebooking;
   const rejected = booking.status === "rejected";
   const waiting = booking.status === "payment_submitted";
   const services = (booking.services || []).map((x) => x.name).join(" + ");
 
   const heading = accepted
-    ? "You are in the queue"
+    ? prebooked
+      ? "Your booking is confirmed for this date"
+      : "You are in the queue"
     : rejected
       ? "Payment not received"
       : timedOut
@@ -90,7 +93,9 @@ export default function PaymentStatus() {
         : "The shop is checking your payment";
 
   const text = accepted
-    ? `${booking.shopName} has accepted your payment.`
+    ? prebooked
+      ? `${booking.shopName} has accepted your payment. Your booking is scheduled for ${formatDateDisplay(booking.bookingDate, true)}.`
+      : `${booking.shopName} has accepted your payment.`
     : rejected
       ? "Payment was not received. Please try again. You can book this shop again after 30 minutes."
       : timedOut
@@ -118,7 +123,7 @@ export default function PaymentStatus() {
 
       <p className="text-soft mt-2">{text}</p>
 
-      {accepted && booking.token && (
+      {accepted && !prebooked && booking.token && (
         <div className="mt-6">
           <p className="label">Token</p>
           <div className="font-serif text-7xl text-gold mt-1">
@@ -172,7 +177,7 @@ export default function PaymentStatus() {
       )}
 
       <div className="flex flex-wrap gap-3 mt-8">
-        {accepted && (
+        {accepted && !prebooked && (
           <Link to="/app/queue" className="btn">
             Track my queue
           </Link>

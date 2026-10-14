@@ -10,6 +10,8 @@ import {
   listClosureResolutions,
   getMine,
   listPending,
+  listPrebookings,
+  takePrebooking,
   acceptBooking,
   declineBooking,
   getUpiSettings,
@@ -41,6 +43,12 @@ router.get(
   auth,
   requireRole("owner", "shop", "co_owner"),
   listPending,
+);
+router.get(
+  "/prebookings",
+  auth,
+  requireRole("owner", "shop", "co_owner"),
+  listPrebookings,
 );
 
 router.get(
@@ -85,6 +93,12 @@ router.patch(
   auth,
   requireRole("owner", "shop", "co_owner"),
   acceptBooking,
+);
+router.patch(
+  "/:id/take-into-queue",
+  auth,
+  requireRole("owner", "shop", "co_owner"),
+  takePrebooking,
 );
 router.patch(
   "/:id/decline",
