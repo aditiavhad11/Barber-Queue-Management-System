@@ -1793,6 +1793,7 @@ export function OwnerProvider({ children }) {
     setState((p) => {
       const target = p.shops.find((s) => s.id === b.shopId);
       if (
+        b.isPrebooking ||
         !target ||
         Object.values(target.queues || {})
           .flat()
@@ -1999,11 +2000,38 @@ export function OwnerProvider({ children }) {
             ])
           : globalNotifications;
   const customerPayments = state.customer?.id
-    ? state.shops.flatMap((s) =>
+    ? (myBookings.length
+      ? myBookings.map((b) => ({
+          id: b.id,
+          shop: b.shopName,
+          shopId: b.shopId,
+          service: (b.services || []).map((x) => x.name).join(" + "),
+          barber: b.barberName,
+          date: b.bookingDate,
+          time: b.acceptedAt
+            ? new Date(b.acceptedAt).toLocaleTimeString("en-IN", {
+                hour: "numeric",
+                minute: "2-digit",
+              })
+            : "",
+          price: b.amount,
+          amount: b.amount,
+          status:
+            b.status === "accepted"
+              ? b.isPrebooking
+                ? "Scheduled"
+                : "Successful"
+              : b.status === "rejected"
+                ? "Cancelled"
+                : "Pending",
+          queueId: b.queueId,
+          queueStatus: b.queueStatus,
+        }))
+      : state.shops.flatMap((s) =>
         (s.payments || [])
           .filter((p) => p.customerId === state.customer.id)
           .map((p) => ({ ...p, shop: s.name, shopContact: s.contact })),
-      )
+      ))
     : [];
   const completedCustomerVisits = state.customer?.id
     ? state.shops.flatMap((s) =>

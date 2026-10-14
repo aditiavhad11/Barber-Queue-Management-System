@@ -22,6 +22,7 @@ import {
   X,
   User,
   MessageSquareWarning,
+  CalendarClock,
 } from "lucide-react";
 import { useAuth } from "../hooks/useAuth";
 import { useOwner } from "../hooks/useOwnerStore";
@@ -45,6 +46,7 @@ const groupsWithPermissions = [
     "Operations",
     [
       ["/shop/queue", "Queue", ListOrdered, false, "manage_queue"],
+      ["/shop/prebookings", "Prebookings", CalendarClock, false, "manage_queue"],
       ["/shop/barbers", "Barbers", Scissors, false, "manage_barbers"],
       ["/shop/services", "Services", Tag, false, "manage_services"],
     ],
