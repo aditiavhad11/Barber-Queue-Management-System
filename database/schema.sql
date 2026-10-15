@@ -2,7 +2,8 @@
 -- barber_queue : complete schema (merged)
 -- Includes: schema.sql + add_password_auth + add_upi_qr_payment +
 --           add_queue_reviews + add_service_unavailability +
---           add_complaint_details_and_resolution + add_complaint_target_routing
+--           add_complaint_details_and_resolution + add_complaint_target_routing +
+--           add_schemes_offers + add_booking_service_edits
 --
 -- Safe to run on:
 --   * a fresh server       -> Part 1 creates everything, Part 2 is a no-op
@@ -10,6 +11,9 @@
 --                             any missing columns / indexes and backfills
 -- Re-running is harmless (fully idempotent). Requires MySQL 8.0.16+.
 -- =====================================================================
+
+-- DANGER: uncomment ONLY for a throwaway dev reset. It wipes all data and
+-- contradicts the "safe to re-run on an existing database" guarantee above.
 
 DROP DATABASE IF EXISTS barber_queue;
 CREATE DATABASE IF NOT EXISTS barber_queue CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -266,15 +270,6 @@ CREATE TABLE IF NOT EXISTS emergency_closures (
   INDEX idx_emergency_closure_shop_period (shop_id, start_at, end_at, status)
 ) ENGINE=InnoDB;
 
-CREATE TABLE IF NOT EXISTS emergency_closure_notifications (
-  closure_id CHAR(36) NOT NULL,
-  booking_id CHAR(36) NOT NULL,
-  sent_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (closure_id, booking_id),
-  FOREIGN KEY (closure_id) REFERENCES emergency_closures(id) ON DELETE CASCADE,
-  FOREIGN KEY (booking_id) REFERENCES payment_bookings(id) ON DELETE CASCADE
-) ENGINE=InnoDB;
-
 CREATE TABLE IF NOT EXISTS audit_logs (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   actor_id CHAR(36),
@@ -333,6 +328,15 @@ CREATE TABLE IF NOT EXISTS payment_bookings (
   INDEX idx_booking_customer (customer_id, status),
   INDEX idx_booking_request (customer_id, request_hash, status),
   INDEX idx_booking_scheme_status (scheme_id,status)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS emergency_closure_notifications (
+  closure_id CHAR(36) NOT NULL,
+  booking_id CHAR(36) NOT NULL,
+  sent_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (closure_id, booking_id),
+  FOREIGN KEY (closure_id) REFERENCES emergency_closures(id) ON DELETE CASCADE,
+  FOREIGN KEY (booking_id) REFERENCES payment_bookings(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- Service edit payments/refunds are kept separate from the original booking payment.
@@ -476,6 +480,23 @@ SET @ddl := IF(@type IS NOT NULL AND LOCATE('''payment_submitted''', @type)=0,
   'SELECT 1');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- schemes / offers (add_schemes_offers)
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='original_amount');
+SET @ddl := IF(@c=0, 'ALTER TABLE payment_bookings ADD COLUMN original_amount DECIMAL(10,2) NULL AFTER amount', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='discount_amount');
+SET @ddl := IF(@c=0, 'ALTER TABLE payment_bookings ADD COLUMN discount_amount DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER original_amount', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='scheme_id');
+SET @ddl := IF(@c=0, 'ALTER TABLE payment_bookings ADD COLUMN scheme_id CHAR(36) NULL AFTER discount_amount', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND INDEX_NAME='idx_booking_scheme_status');
+SET @ddl := IF(@c=0, 'CREATE INDEX idx_booking_scheme_status ON payment_bookings (scheme_id,status)', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- ---- complaints (add_complaint_details_and_resolution, add_complaint_target_routing)
 SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='complaints' AND COLUMN_NAME='issue_type');
 SET @ddl := IF(@c=0, 'ALTER TABLE complaints ADD COLUMN issue_type VARCHAR(80) NOT NULL DEFAULT ''Other''', 'SELECT 1');
@@ -532,4 +553,30 @@ PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='barbers' AND COLUMN_NAME='working_days_json');
 SET @ddl := IF(@c=0, 'ALTER TABLE barbers ADD COLUMN working_days_json JSON NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ---- booking_service_edits (add_booking_service_edits) ---------------
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='booking_service_edits' AND COLUMN_NAME='proposed_total');
+SET @ddl := IF(@c=0, 'ALTER TABLE booking_service_edits ADD COLUMN proposed_total DECIMAL(10,2) NOT NULL DEFAULT 0', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='booking_service_edits' AND COLUMN_NAME='resolved_by_role');
+SET @ddl := IF(@c=0, 'ALTER TABLE booking_service_edits ADD COLUMN resolved_by_role ENUM(''owner'',''shop'',''co_owner'') NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- resolved_by used to be a FK to users; it now holds owner / shop / co-owner ids
+-- (CHAR(64)), so drop the old FK if present and widen the column.
+SET @resolver_fk := NULL;
+SELECT CONSTRAINT_NAME INTO @resolver_fk
+FROM information_schema.KEY_COLUMN_USAGE
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='booking_service_edits'
+  AND COLUMN_NAME='resolved_by' AND REFERENCED_TABLE_NAME IS NOT NULL
+LIMIT 1;
+SET @ddl := IF(@resolver_fk IS NULL, 'SELECT 1',
+  CONCAT('ALTER TABLE booking_service_edits DROP FOREIGN KEY `', REPLACE(@resolver_fk, '`', '``'), '`'));
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @resolved_by_type := (SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='booking_service_edits' AND COLUMN_NAME='resolved_by');
+SET @ddl := IF(LOWER(@resolved_by_type)='char(64)', 'SELECT 1',
+  'ALTER TABLE booking_service_edits MODIFY COLUMN resolved_by CHAR(64) NULL');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;

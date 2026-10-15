@@ -438,20 +438,22 @@ export async function listPending(req, res) {
 
 export async function listPrebookings(req, res) {
   const { sql, params } = scope(req);
-  const date = String(req.query.date || localDateKey());
+  const date = String(req.query.date || "").trim();
   const pageSize = Math.min(30, Math.max(10, Number(req.query.pageSize) || 10));
   const page = Math.max(1, Number(req.query.page) || 1);
   const offset = (page - 1) * pageSize;
+  const dateFilter = date ? " AND b.booking_date=?" : "";
+  const dateParams = date ? [date] : [];
   const [countRows] = await pool.query(
     `SELECT COUNT(*) AS total FROM payment_bookings b
      JOIN shops s ON s.id=b.shop_id
      WHERE b.status='accepted' AND b.queue_status='Prebooked'
-       AND b.booking_date=? AND ${sql}`,
-    [date, ...params],
+       ${dateFilter} AND ${sql}`,
+    [...dateParams, ...params],
   );
   const rows = await findBookings(
-    `b.status='accepted' AND b.queue_status='Prebooked' AND b.booking_date=? AND ${sql}`,
-    [date, ...params],
+    `b.status='accepted' AND b.queue_status='Prebooked'${dateFilter} AND ${sql}`,
+    [...dateParams, ...params],
     `ORDER BY b.booking_date ASC, b.accepted_at ASC LIMIT ${pageSize} OFFSET ${offset}`,
   );
   res.json({
