@@ -53,8 +53,14 @@ export default function EmergencyClosure({ shop, onUpdate }) {
 
   const openModal = () => {
     setMode(closure.startAt ? "hours" : "days");
-    setStartAt(closure.startAt ? localDateTime(new Date(closure.startAt)) : localDateTime());
-    setEndAt(closure.endAt ? localDateTime(new Date(closure.endAt)) : localDateTime(new Date(Date.now() + 2 * 3600000)));
+    const nextStartAt = closure.startAt ? localDateTime(new Date(closure.startAt)) : localDateTime();
+    const nextEndAt = closure.endAt
+      ? localDateTime(new Date(closure.endAt))
+      : localDateTime(new Date(Date.now() + 2 * 3600000));
+    setStartAt(nextStartAt);
+    setEndAt(nextEndAt);
+    const durationHours = (new Date(nextEndAt).getTime() - new Date(nextStartAt).getTime()) / 3600000;
+    setDuration(Number.isInteger(durationHours) && durationHours >= 1 && durationHours <= 4 ? String(durationHours) : "");
     setStartDate(closure.startDate || toLocalDateString());
     setEndDate(closure.endDate || toLocalDateString(new Date(Date.now() + 4 * 86400000)));
     setReason(closure.reason || "");
@@ -64,6 +70,13 @@ export default function EmergencyClosure({ shop, onUpdate }) {
   const chooseDuration = (hours) => {
     setDuration(String(hours));
     setEndAt(localDateTime(new Date(new Date(startAt).getTime() + hours * 3600000)));
+  };
+
+  const handleStartAtChange = (value) => {
+    setStartAt(value);
+    if (duration) {
+      setEndAt(localDateTime(new Date(new Date(value).getTime() + Number(duration) * 3600000)));
+    }
   };
 
   const handleSave = async (event) => {
@@ -154,15 +167,15 @@ export default function EmergencyClosure({ shop, onUpdate }) {
         <Modal title="Emergency / Temporary Closure" onClose={() => setModalOpen(false)} actions={<button className="btn text-xs !py-2 !px-4" onClick={handleSave} disabled={saving}>{saving ? "Saving..." : "Confirm & Close Shop"}</button>}>
           <div className="space-y-4">
             <div className="flex gap-2">
-              {["hours", "days"].map((item) => <button key={item} type="button" className={`btn-ghost text-xs ${mode === item ? "border-coffee bg-cream" : ""}`} onClick={() => setMode(item)}>{item === "hours" ? "Hours-based" : "Day-based"}</button>)}
+              {["hours", "days"].map((item) => <button key={item} type="button" className={`btn-ghost text-xs ${mode === item ? "!border-brass !bg-brass !text-cream hover:!bg-brass" : ""}`} onClick={() => setMode(item)}>{item === "hours" ? "Hours-based" : "Day-based"}</button>)}
             </div>
             {mode === "hours" ? (
               <>
                 <div className="grid grid-cols-2 gap-3">
-                  <label className="text-xs">Closure starts<input type="datetime-local" className="input w-full mt-1" value={startAt} onChange={(e) => setStartAt(e.target.value)} /></label>
-                  <label className="text-xs">Reopens at<input type="datetime-local" className="input w-full mt-1" value={endAt} min={startAt} onChange={(e) => setEndAt(e.target.value)} /></label>
+                  <label className="text-xs">Closure starts<input type="datetime-local" className="input w-full mt-1" value={startAt} onChange={(e) => handleStartAtChange(e.target.value)} /></label>
+                  <label className="text-xs">Reopens at<input type="datetime-local" className="input w-full mt-1" value={endAt} min={startAt} onChange={(e) => { setDuration(""); setEndAt(e.target.value); }} /></label>
                 </div>
-                <div className="flex flex-wrap gap-2">{[1, 2, 3, 4].map((hours) => <button key={hours} type="button" className="btn-ghost text-xs" onClick={() => chooseDuration(hours)}>{hours} hour{hours > 1 ? "s" : ""}</button>)}</div>
+                <div className="flex flex-wrap gap-2">{[1, 2, 3, 4].map((hours) => <button key={hours} type="button" className={`btn-ghost text-xs ${duration === String(hours) ? "!border-brass !bg-brass !text-cream hover:!bg-brass" : ""}`} onClick={() => chooseDuration(hours)}>{hours} hour{hours > 1 ? "s" : ""}</button>)}</div>
               </>
             ) : (
               <div className="grid grid-cols-2 gap-3">
