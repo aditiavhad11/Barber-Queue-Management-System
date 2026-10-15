@@ -15,7 +15,7 @@ const todayKey = () =>
 
 export default function Prebookings() {
   const { shop, refreshBookings } = useOwner();
-  const [date, setDate] = useState(todayKey());
+  const [date, setDate] = useState("");
   const [pageSize, setPageSize] = useState(10);
   const [page, setPage] = useState(1);
   const [result, setResult] = useState({ items: [], total: 0 });
@@ -46,8 +46,6 @@ export default function Prebookings() {
   }, [shop?.id, date, page, pageSize]);
 
   const pages = Math.max(1, Math.ceil(result.total / pageSize));
-  const isToday = date === todayKey();
-
   const takeInQueue = async (booking) => {
     setBusyId(booking.id);
     try {
@@ -76,7 +74,7 @@ export default function Prebookings() {
       />
       <div className="flex flex-wrap items-end gap-4 mb-8">
         <label className="block">
-          <span className="label">Booking date</span>
+          <span className="label">Filter by booking date</span>
           <input
             className="input mt-2"
             type="date"
@@ -86,6 +84,18 @@ export default function Prebookings() {
               setPage(1);
             }}
           />
+          {date && (
+            <button
+              className="btn-ghost !py-2 mt-2"
+              type="button"
+              onClick={() => {
+                setDate("");
+                setPage(1);
+              }}
+            >
+              Show all dates
+            </button>
+          )}
         </label>
         <label className="block">
           <span className="label">Customers per page</span>
@@ -111,7 +121,11 @@ export default function Prebookings() {
       ) : !result.items.length ? (
         <Empty
           title="No prebookings"
-          text={`No accepted prebookings for ${formatDateDisplay(date, true)}.`}
+          text={
+            date
+              ? `No accepted prebookings for ${formatDateDisplay(date, true)}.`
+              : "There are no accepted prebookings."
+          }
         />
       ) : (
         <div className="border-t border-khaki">
@@ -121,6 +135,9 @@ export default function Prebookings() {
               className="py-5 border-b border-khaki flex flex-wrap items-center justify-between gap-4"
             >
               <div>
+                <p className="text-sm text-soft mb-1">
+                  Booking date: {formatDateDisplay(booking.bookingDate, true)}
+                </p>
                 <b className="text-lg">
                   {booking.beneficiary?.isSelf === false
                     ? booking.beneficiary.name
@@ -138,8 +155,14 @@ export default function Prebookings() {
               </div>
               <button
                 className="btn !py-2"
-                disabled={!isToday || busyId === booking.id}
-                title={!isToday ? "Only today's customers can join the queue." : ""}
+                disabled={
+                  booking.bookingDate !== todayKey() || busyId === booking.id
+                }
+                title={
+                  booking.bookingDate !== todayKey()
+                    ? "Only today's customers can join the queue."
+                    : ""
+                }
                 onClick={() => takeInQueue(booking)}
               >
                 {busyId === booking.id ? "Working" : "Take in the queue"}
