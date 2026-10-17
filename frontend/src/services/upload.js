@@ -15,6 +15,8 @@ export async function uploadImages(items, api) {
     formData.append("images", file);
     formData.append("folders", folder);
   });
-  const { data } = await api.post("/uploads/images", formData);
+  const { data } = await api.post("/uploads/images", formData, {
+    toastOnError: false,
+  });
   return data.images;
 }

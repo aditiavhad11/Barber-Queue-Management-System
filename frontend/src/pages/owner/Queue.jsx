@@ -213,6 +213,11 @@ export default function Queue() {
                         · PREBOOKING
                       </span>
                     )}
+                    {b.isSameDayScheduled && (
+                      <span className="ml-2 text-brass font-semibold">
+                        · SAME-DAY SCHEDULED · {b.scheduledTime}
+                      </span>
+                    )}
                   </p>
                 )}
                 <p className="text-md text-hint mt-1">
@@ -284,7 +289,15 @@ export default function Queue() {
 
       <div className="grid xl:grid-cols-2 gap-10">
         {barbers.map((b) => {
-          const list = activeOf(queues[b.id] || []);
+          const barberQueue = queues[b.id] || [];
+          const list = activeOf(barberQueue);
+          const scheduled = barberQueue
+            .filter((entry) => entry.status === "Scheduled")
+            .sort((a, z) =>
+              String(a.scheduledTime || "").localeCompare(
+                String(z.scheduledTime || ""),
+              ),
+            );
           const hasSvc = list.some((e) => e.status === "In Service");
           const firstWaiting = list.find((e) => e.status === "Waiting");
           return (
@@ -449,6 +462,55 @@ export default function Queue() {
                     </div>
                   );
                 })
+              )}
+              {scheduled.length > 0 && (
+                <div className="mt-5 border border-brass/40 bg-brass/5">
+                  <div className="px-4 py-3 border-b border-brass/30">
+                    <h3 className="font-semibold">Same-day scheduled appointments</h3>
+                    <p className="text-xs text-coffee/70 mt-1">
+                      Accepted slots are protected from normal queue bookings.
+                    </p>
+                  </div>
+                  {scheduled.map((e) => {
+                    const svcNames =
+                      e.services?.map((x) => x.name).join(" + ") ||
+                      services.find((s) => s.id === e.service)?.name;
+                    const totalDur =
+                      e.serviceDuration ||
+                      durOf(services, e.service);
+                    return (
+                      <div key={e.id} className="px-4 py-4 border-b border-brass/20 last:border-b-0">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <p className="text-xl font-semibold">
+                              {e.scheduledTime || "--:--"}{" "}
+                              <span className="text-base">
+                                {e.beneficiary?.isSelf === false
+                                  ? e.beneficiary.name
+                                  : e.name}
+                              </span>
+                            </p>
+                            <p className="text-sm text-coffee/70">
+                              {svcNames} · {totalDur} min · ₹
+                              {Number(e.paymentAmount || 0).toFixed(2)} total
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <StatusBadge s={e.status} />
+                            <button
+                              className="btn-ghost !py-2 text-rose"
+                              onClick={() =>
+                                queueAction(shop.id, b.id, e.id, "remove")
+                              }
+                            >
+                              Remove / no-show
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </section>
           );

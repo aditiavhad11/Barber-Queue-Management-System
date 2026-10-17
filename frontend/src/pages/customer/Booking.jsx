@@ -51,6 +51,7 @@ export default function Booking() {
   const [paymentError, setPaymentError] = useState("");
   const [payerName, setPayerName] = useState("");
   const [bookingDate, setBookingDate] = useState(bookingToday());
+  const [scheduledTime, setScheduledTime] = useState("");
   const [dateRestrictions, setDateRestrictions] = useState([]);
   const [availabilityLoading, setAvailabilityLoading] = useState(true);
   const [availabilityError, setAvailabilityError] = useState("");
@@ -108,6 +109,7 @@ export default function Booking() {
         serviceIds: sids,
         barberId: barber.id,
         bookingDate,
+        scheduledTime: bookingDate === bookingToday() ? scheduledTime : "",
         promoCode: code,
         beneficiary: beneficiaryBody(),
       });
@@ -167,6 +169,7 @@ export default function Booking() {
     friend.mobile,
     friend.email,
     bookingDate,
+    scheduledTime,
     blockedSelection,
     appliedPromoCode,
   ]);
@@ -199,6 +202,7 @@ export default function Booking() {
         serviceIds: sids,
         barberId: barber.id,
         bookingDate,
+        scheduledTime: bookingDate === bookingToday() ? scheduledTime : "",
         beneficiary: beneficiaryBody(),
         payerName: payerName.trim(),
         quoteToken: quote.quoteToken,
@@ -332,6 +336,7 @@ export default function Booking() {
               value={bookingDate}
               onChange={(e) => {
                 setBookingDate(e.target.value);
+                if (e.target.value !== bookingToday()) setScheduledTime("");
                 setDateRestrictions([]);
                 setAvailabilityLoading(true);
                 setAvailabilityError("");
@@ -344,6 +349,23 @@ export default function Booking() {
             <p className="text-sm text-coffee/70">
               Checking service availability...
             </p>
+          )}
+          {bookingDate === bookingToday() && (
+            <label className="block max-w-xs">
+              <span className="label">Same-day appointment time (optional)</span>
+              <input
+                className="input mt-2"
+                type="time"
+                min={new Date(Date.now() + 60 * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
+                value={scheduledTime}
+                onChange={(e) => {
+                  setScheduledTime(e.target.value);
+                  setQuote(null);
+                  setPaymentError("");
+                }}
+              />
+              <span className="text-xs text-coffee/60">Leave blank to join the normal queue.</span>
+            </label>
           )}
           {availabilityError && (
             <p className="text-sm text-rose" role="alert">

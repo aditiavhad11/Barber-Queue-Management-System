@@ -683,7 +683,9 @@ export function OwnerProvider({ children }) {
       .map((x) => x.id);
     if (!ids.length) throw new Error("No shops found for this owner.");
     const results = await Promise.allSettled(
-      ids.map((id) => api.patch(`/shops/${id}`, { policy }, { toastOnError: false })),
+      ids.map((id) =>
+        api.patch(`/shops/${id}`, { policy }, { toastOnError: false }),
+      ),
     );
     const okIds = ids.filter((_, i) => results[i].status === "fulfilled");
     setState((p) => ({
@@ -811,7 +813,9 @@ export function OwnerProvider({ children }) {
       throw new Error("Owner session is missing. Please sign in again.");
     const normalizedPayload = { ...payload };
     try {
-      const { data } = await api.post("/shops", normalizedPayload);
+      const { data } = await api.post("/shops", normalizedPayload, {
+        toastOnError: false,
+      });
       const serverShop = normalizeDbShop(data);
       sessionStorage.setItem("ownerCurrentShopId", serverShop.id);
       setState((p) => ({
@@ -947,9 +951,7 @@ export function OwnerProvider({ children }) {
           `/bookings/${live.bookingId}/queue-status`,
           {
             action,
-            ...(action === "swap" && targetPosition
-              ? { targetPosition }
-              : {}),
+            ...(action === "swap" && targetPosition ? { targetPosition } : {}),
           },
           { toastOnError: false },
         )
@@ -996,14 +998,14 @@ export function OwnerProvider({ children }) {
       const index = queue.findIndex((e) => e.id === entryId);
       if (
         index < 0 ||
-        (action === "swap" &&
-          queue[index].status !== "Your Turn") ||
+        (action === "swap" && queue[index].status !== "Your Turn") ||
         (action === "requeue" && queue[index].status !== "Your Turn") ||
         (action === "remove" &&
           !["Waiting", "Your Turn"].includes(queue[index].status))
       )
         return p;
-      if (action === "remove") queue[index] = { ...queue[index], status: "Cancelled" };
+      if (action === "remove")
+        queue[index] = { ...queue[index], status: "Cancelled" };
       else if (action === "swap") {
         const waiting = queue.filter((e) =>
           ["Waiting", "Your Turn"].includes(e.status),
@@ -1189,9 +1191,7 @@ export function OwnerProvider({ children }) {
         barber: barber?.name || "Barber",
         services,
         status: entry.status,
-        ...(entry.closureChoice
-          ? { closureChoice: entry.closureChoice }
-          : {}),
+        ...(entry.closureChoice ? { closureChoice: entry.closureChoice } : {}),
         message: String(message || "").trim(),
       });
     } catch (error) {
@@ -1545,6 +1545,8 @@ export function OwnerProvider({ children }) {
               paymentStatus: "Successful",
               paymentAmount: b.totalAmount ?? b.amount,
               bookingDate: b.bookingDate,
+              scheduledTime: b.scheduledTime,
+              isSameDayScheduled: b.isSameDayScheduled,
               joinedAt: new Date(
                 b.acceptedAt || b.paidAt || Date.now(),
               ).getTime(),
@@ -1552,9 +1554,7 @@ export function OwnerProvider({ children }) {
               ...(b.queuePosition
                 ? { queuePosition: Number(b.queuePosition) }
                 : {}),
-              ...(b.closureChoice
-                ? { closureChoice: b.closureChoice }
-                : {}),
+              ...(b.closureChoice ? { closureChoice: b.closureChoice } : {}),
               skipCount: b.skipCount || 0,
               ...(b.skippedAt ? { skippedAt: b.skippedAt } : {}),
               ...(b.completedAt ? { completedAt: b.completedAt } : {}),
@@ -1607,7 +1607,9 @@ export function OwnerProvider({ children }) {
               .map((b) => list.find((e) => e.id === b.queueId))
               .filter(Boolean);
             const rest = list.filter((e) => !serverIds.has(e.id));
-            const beforeOrder = list.map((entry) => `${entry.id}:${entry.status}`).join("|");
+            const beforeOrder = list
+              .map((entry) => `${entry.id}:${entry.status}`)
+              .join("|");
             let nextQueue;
             if (sessionRole === "customer") {
               const positioned = Array(list.length).fill(null);
@@ -1616,23 +1618,35 @@ export function OwnerProvider({ children }) {
                 const source = mine.find((b) => b.queueId === entry.id);
                 const requestedIndex = Number(source?.queuePosition || 0) - 1;
                 if (requestedIndex < 0) continue;
-                let targetIndex = Math.min(requestedIndex, positioned.length - 1);
-                while (targetIndex < positioned.length && positioned[targetIndex])
+                let targetIndex = Math.min(
+                  requestedIndex,
+                  positioned.length - 1,
+                );
+                while (
+                  targetIndex < positioned.length &&
+                  positioned[targetIndex]
+                )
                   targetIndex += 1;
                 if (targetIndex < positioned.length) {
                   positioned[targetIndex] = entry;
                   positionedIds.add(entry.id);
                 }
               }
-              const remaining = rest.filter((entry) => !positionedIds.has(entry.id));
+              const remaining = rest.filter(
+                (entry) => !positionedIds.has(entry.id),
+              );
               let remainingIndex = 0;
               nextQueue = normalizeQueue(
-                positioned.map((entry) => entry || remaining[remainingIndex++]).filter(Boolean),
+                positioned
+                  .map((entry) => entry || remaining[remainingIndex++])
+                  .filter(Boolean),
               );
             } else {
               nextQueue = normalizeQueue([...fromServer, ...rest]);
             }
-            const afterOrder = nextQueue.map((entry) => `${entry.id}:${entry.status}`).join("|");
+            const afterOrder = nextQueue
+              .map((entry) => `${entry.id}:${entry.status}`)
+              .join("|");
             if (beforeOrder !== afterOrder) changed = true;
             queues[barberId] = nextQueue;
           }
@@ -1890,7 +1904,7 @@ export function OwnerProvider({ children }) {
             ])
           : globalNotifications;
   const customerPayments = state.customer?.id
-    ? (myBookings.length
+    ? myBookings.length
       ? myBookings.map((b) => ({
           id: b.id,
           shop: b.shopName,
@@ -1918,10 +1932,10 @@ export function OwnerProvider({ children }) {
           queueStatus: b.queueStatus,
         }))
       : state.shops.flatMap((s) =>
-        (s.payments || [])
-          .filter((p) => p.customerId === state.customer.id)
-          .map((p) => ({ ...p, shop: s.name, shopContact: s.contact })),
-      ))
+          (s.payments || [])
+            .filter((p) => p.customerId === state.customer.id)
+            .map((p) => ({ ...p, shop: s.name, shopContact: s.contact })),
+        )
     : [];
   const completedCustomerVisits = state.customer?.id
     ? state.shops.flatMap((s) =>

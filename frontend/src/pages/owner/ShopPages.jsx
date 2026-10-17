@@ -48,7 +48,25 @@ export function Overview() {
       notifyError("Use Reopen Shop Now to end the emergency closure.");
       return;
     }
-    updateShop(shop.id, (p) => ({ ...p, isOpen: !p.isOpen }));
+    const today = toLocalDateString(new Date());
+    updateShop(shop.id, (p) => {
+      const nextAvailability = {
+        ...(p.availability || {}),
+        isOpen: !p.isOpen,
+      };
+      const annualSchedules = {
+        ...(nextAvailability.annualSchedules || {}),
+      };
+      if (!p.isOpen && annualSchedules[today]?.type === "closed") {
+        delete annualSchedules[today];
+        nextAvailability.annualSchedules = annualSchedules;
+      }
+      return {
+        ...p,
+        isOpen: !p.isOpen,
+        availability: nextAvailability,
+      };
+    });
   };
   return (
     <>
@@ -377,6 +395,21 @@ export function Hours() {
           annualSchedules,
         },
       };
+    }).then(() => {
+      if (shopId !== shop.id) return;
+      const nextAnnualSchedules = {
+        ...(shop.availability?.annualSchedules || {}),
+      };
+      dates.forEach((date) => {
+        if (entry) nextAnnualSchedules[date] = entry;
+        else delete nextAnnualSchedules[date];
+      });
+      x.set("availability", {
+        ...(shop.availability || {}),
+        annualSchedules: nextAnnualSchedules,
+      });
+    }).catch(() => {
+      notifyError("Could not save the annual schedule change.");
     });
   };
   return (

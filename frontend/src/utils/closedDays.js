@@ -4,11 +4,18 @@ export const ALL_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const JS_DAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 // availability.days is the list of OPEN days. A day missing from the list is a "Close Shop" day.
 // Shops saved before this option existed have no list, so they stay open every day.
+const SHOP_TIME_ZONE = "Asia/Kolkata";
+const shopDateParts = (date = new Date()) =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone: SHOP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
 export const toLocalDateString = (d = new Date()) => {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  const parts = shopDateParts(d);
+  const get = (type) => parts.find((part) => part.type === type)?.value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
 };
 
 export const formatDateDisplay = (str, includeYear = false) => {
@@ -134,8 +141,9 @@ const tcEnded = (shop, date = new Date()) => {
 
 export const isShopOpenNow = (shop, date = new Date()) => {
   if (getTemporaryClosure(shop, date).isClosed) return false;
+  const manualOpen = shop?.availability?.isOpen === true;
   const annual = annualScheduleForDate(shop, date);
-  if (annual?.type === "closed") return false;
+  if (annual?.type === "closed" && !manualOpen) return false;
   const openFlag =
     shop?.availability?.isOpen !== undefined
       ? shop.availability.isOpen
@@ -147,15 +155,26 @@ export const isShopOpenNow = (shop, date = new Date()) => {
   const expiredEmergency =
     shop?.availability?.emergencyClosed &&
     tcEnded(shop, date);
-  if ((!openFlag && !expiredEmergency) || isClosedToday(shop, date)) return false;
+  if ((!openFlag && !expiredEmergency) || (!manualOpen && isClosedToday(shop, date))) return false;
 
-  const d = JS_DAY[date.getDay()];
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: SHOP_TIME_ZONE,
+    weekday: "short",
+  }).format(date);
+  const d = weekday;
   const sched = scheduleOf(shop)[d];
-  if (!sched || sched.closed) return false;
+  if (!sched || (sched.closed && !manualOpen)) return false;
 
-  const currentH = String(date.getHours()).padStart(2, "0");
-  const currentM = String(date.getMinutes()).padStart(2, "0");
+  const timeParts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: SHOP_TIME_ZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const currentH = timeParts.find((part) => part.type === "hour")?.value;
+  const currentM = timeParts.find((part) => part.type === "minute")?.value;
   const now = `${currentH}:${currentM}`;
+  if (manualOpen) return true;
 
   const override = shop?.availability?.operationalHours;
   if (

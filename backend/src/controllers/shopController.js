@@ -188,7 +188,7 @@ const mapCoOwner = (c) => ({
 const CO_OWNER_COLUMNS =
   "id, shop_id, name, email, phone, title, permissions_json, status, created_at, updated_at";
 const BARBER_COLUMNS =
-  "id,shop_id,name,gender,age,phone,email,experience_years,specialization,working_days_json,rating,status,photo_url";
+  "id,shop_id,name,gender,age,phone,email,experience_years,specialization,working_days_json,queue_limit,rating,status,photo_url";
 
 /* ------------------------------------------------------------------ */
 /* Access helpers                                                      */
@@ -237,7 +237,7 @@ const SHOP_PHOTO_INSERT =
 const SERVICE_INSERT =
   "INSERT INTO services(id,shop_id,name,price,duration_minutes,enabled) VALUES ?";
 const BARBER_INSERT =
-  "INSERT INTO barbers(id,shop_id,name,gender,age,phone,email,experience_years,specialization,working_days_json,status,photo_url) VALUES ?";
+  "INSERT INTO barbers(id,shop_id,name,gender,age,phone,email,experience_years,specialization,working_days_json,queue_limit,status,photo_url) VALUES ?";
 const BARBER_SERVICE_INSERT =
   "INSERT INTO barber_services(barber_id,service_id) VALUES ?";
 const CO_OWNER_INSERT =
@@ -387,6 +387,7 @@ async function hydrateShops(shopRows) {
       experience: b.experience_years || 0,
       specialization: b.specialization || "",
       workingDays: parseJson(b.working_days_json, null),
+      queueLimit: Number(b.queue_limit || 10),
       rating: Number(b.rating),
       status: b.status,
       photo: b.photo_url || "",
@@ -453,6 +454,18 @@ export async function createShop(req, res) {
   const shiftError = validateShifts(b.availability || {});
 
   if (shiftError) return res.status(400).json({ message: shiftError });
+  if (
+    !Array.isArray(b.barbers) ||
+    !b.barbers.length ||
+    b.barbers.some(
+      (barber) =>
+        !Number.isInteger(Number(barber?.queueLimit)) ||
+        Number(barber.queueLimit) <= 0,
+    )
+  )
+    return res.status(400).json({
+      message: "Queue capacity must be a positive whole number for every barber.",
+    });
 
   const id = crypto.randomUUID();
 
@@ -577,6 +590,7 @@ export async function createShop(req, res) {
         Math.max(0, Number(barber.experience) || 0),
         String(barber.specialization || ""),
         barber.workingDays ? JSON.stringify(barber.workingDays) : null,
+        Number(barber.queueLimit),
         barber.status || "Available",
         barber.photo || null,
       ]);
@@ -1223,7 +1237,7 @@ export async function createBarber(req, res) {
   try {
     await connection.beginTransaction();
     await connection.query(
-      "INSERT INTO barbers(id,shop_id,name,gender,age,phone,email,experience_years,specialization,working_days_json,status,photo_url) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO barbers(id,shop_id,name,gender,age,phone,email,experience_years,specialization,working_days_json,queue_limit,status,photo_url) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
       [
         id,
         shopId,
@@ -1237,6 +1251,9 @@ export async function createBarber(req, res) {
         Math.max(0, Number(b.experience) || 0),
         String(b.specialization || ""),
         b.workingDays ? JSON.stringify(b.workingDays) : null,
+        Number.isInteger(Number(b.queueLimit)) && Number(b.queueLimit) > 0
+          ? Number(b.queueLimit)
+          : 10,
         BARBER_STATUSES.includes(b.status) ? b.status : "Available",
         b.photo ? String(b.photo) : null,
       ],
@@ -1272,6 +1289,7 @@ export async function createBarber(req, res) {
       experience: row.experience_years || 0,
       specialization: row.specialization || "",
       workingDays: parseJson(row.working_days_json, null),
+      queueLimit: Number(row.queue_limit || 10),
       rating: Number(row.rating),
       status: row.status,
       photo: row.photo_url || "",
@@ -1339,6 +1357,11 @@ export async function updateBarber(req, res) {
   }
   if (b.specialization !== undefined)
     add("specialization", String(b.specialization || ""));
+  if (b.queueLimit !== undefined) {
+    if (!Number.isInteger(Number(b.queueLimit)) || Number(b.queueLimit) <= 0)
+      return res.status(400).json({ message: "Queue capacity must be a positive whole number." });
+    add("queue_limit", Number(b.queueLimit));
+  }
   if (b.workingDays !== undefined)
     add(
       "working_days_json",
@@ -1399,6 +1422,7 @@ export async function updateBarber(req, res) {
       experience: row.experience_years || 0,
       specialization: row.specialization || "",
       workingDays: parseJson(row.working_days_json, null),
+      queueLimit: Number(row.queue_limit || 10),
       rating: Number(row.rating),
       status: row.status,
       photo: row.photo_url || "",
