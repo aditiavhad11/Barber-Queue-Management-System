@@ -70,7 +70,8 @@ const localTimeKey = (date = new Date()) => {
 
 function assertAnnualScheduleAllowsBooking(availability, bookingDate) {
   const schedules =
-    availability?.annualSchedules && typeof availability.annualSchedules === "object"
+    availability?.annualSchedules &&
+    typeof availability.annualSchedules === "object"
       ? availability.annualSchedules
       : {};
   const item = schedules[bookingDate];
@@ -83,14 +84,19 @@ function assertAnnualScheduleAllowsBooking(availability, bookingDate) {
       status: 409,
     });
   }
-  if (["half_day", "special_hours"].includes(type) && bookingDate === localDateKey()) {
+  if (
+    ["half_day", "special_hours"].includes(type) &&
+    bookingDate === localDateKey()
+  ) {
     const open = String(item.open || "09:00").slice(0, 5);
     const close = String(item.close || "21:00").slice(0, 5);
     const now = localTimeKey();
     if (close <= open || now < open || now >= close) {
       const label = type === "half_day" ? "half-day hours" : "special hours";
       throw Object.assign(
-        new Error(`This shop is only accepting bookings during ${label} today (${open}-${close}).`),
+        new Error(
+          `This shop is only accepting bookings during ${label} today (${open}-${close}).`,
+        ),
         { status: 409 },
       );
     }
@@ -142,7 +148,14 @@ function beneficiaryFrom(body, customer) {
 
 async function validateSelection(
   connection,
-  { shopId, barberId, serviceIds, customerId, bookingDate },
+  {
+    shopId,
+    barberId,
+    serviceIds,
+    customerId,
+    bookingDate,
+    scheduledTime = null,
+  },
 ) {
   const [shops] = await connection.query(
     "SELECT id,name,upi_qr_url,availability_json FROM shops WHERE id=? AND status='approved' AND active=1 LIMIT 1",
@@ -175,9 +188,7 @@ async function validateSelection(
     ? new Date(avail.temporaryClosure.endAt)
     : null;
   const emergencyExpired =
-    avail.emergencyClosed &&
-    emergencyEnd &&
-    emergencyEnd <= new Date();
+    avail.emergencyClosed && emergencyEnd && emergencyEnd <= new Date();
   if (avail.isOpen === false && !emergencyExpired) {
     throw Object.assign(new Error("This shop is currently closed."), {
       status: 409,
@@ -189,27 +200,40 @@ async function validateSelection(
   }).format(new Date(`${bookingDate}T12:00:00Z`));
   const annual = avail.annualSchedules?.[bookingDate];
   const schedule = avail.schedule?.[bookingWeekday];
-  if (annual?.type === "closed" || (!annual && schedule?.closed)) {
-    throw Object.assign(new Error("This shop is closed on the selected booking date."), {
-      status: 409,
-    });
+  const manualOpenToday = bookingDate === today && avail.isOpen === true;
+  if (
+    !manualOpenToday &&
+    (annual?.type === "closed" || (!annual && schedule?.closed))
+  ) {
+    throw Object.assign(
+      new Error("This shop is closed on the selected booking date."),
+      {
+        status: 409,
+      },
+    );
   }
   if (bookingDate === today) {
     const override = avail.operationalHours;
-    const shifts = override?.enabled &&
-      (!override.date || override.date === today)
-      ? [{ open: override.open, close: override.close }]
-      : annual && ["half_day", "special_hours"].includes(annual.type)
-        ? [{ open: annual.open, close: annual.close }]
-      : Array.isArray(schedule?.shifts) && schedule.shifts.length
-        ? schedule.shifts
-        : [{ open: schedule?.open || "09:00", close: schedule?.close || "21:00" }];
+    const shifts =
+      override?.enabled && (!override.date || override.date === today)
+        ? [{ open: override.open, close: override.close }]
+        : annual && ["half_day", "special_hours"].includes(annual.type)
+          ? [{ open: annual.open, close: annual.close }]
+          : Array.isArray(schedule?.shifts) && schedule.shifts.length
+            ? schedule.shifts
+            : [
+                {
+                  open: schedule?.open || "09:00",
+                  close: schedule?.close || "21:00",
+                },
+              ];
     if (
-      annual?.type === "closed" ||
-      (!annual && schedule?.closed) ||
-      !shifts.some(
-        (shift) => currentTime >= shift.open && currentTime < shift.close,
-      )
+      (!manualOpenToday &&
+        (annual?.type === "closed" || (!annual && schedule?.closed))) ||
+      (!manualOpenToday &&
+        !shifts.some(
+          (shift) => currentTime >= shift.open && currentTime < shift.close,
+        ))
     ) {
       throw Object.assign(
         new Error("This shop is outside its booking hours right now."),
@@ -223,28 +247,28 @@ async function validateSelection(
       // The server-side timestamp is authoritative; an expired hour closure
       // must not keep blocking new bookings because the UI was not refreshed.
     } else {
-    const start = tc.startDate || today;
-    const end = tc.endDate || "";
-    const hourClosureApplies =
-      tc.startAt &&
-      bookingDate === String(tc.startAt).slice(0, 10) &&
-      new Date(tc.startAt) <= new Date() &&
-      (!tc.endAt || new Date() < new Date(tc.endAt));
-    const dayClosureApplies =
-      !tc.startAt && bookingDate >= start && (!end || bookingDate <= end);
-    if (hourClosureApplies || dayClosureApplies) {
-      const reasonPart = tc.reason ? ` (${tc.reason})` : "";
-      const untilPart = end ? ` until ${end}` : "";
-      throw Object.assign(
-        new Error(
-          `This shop is temporarily closed for emergency${reasonPart}${untilPart}.`,
-        ),
-        { status: 409 },
-      );
-    }
+      const start = tc.startDate || today;
+      const end = tc.endDate || "";
+      const hourClosureApplies =
+        tc.startAt &&
+        bookingDate === String(tc.startAt).slice(0, 10) &&
+        new Date(tc.startAt) <= new Date() &&
+        (!tc.endAt || new Date() < new Date(tc.endAt));
+      const dayClosureApplies =
+        !tc.startAt && bookingDate >= start && (!end || bookingDate <= end);
+      if (hourClosureApplies || dayClosureApplies) {
+        const reasonPart = tc.reason ? ` (${tc.reason})` : "";
+        const untilPart = end ? ` until ${end}` : "";
+        throw Object.assign(
+          new Error(
+            `This shop is temporarily closed for emergency${reasonPart}${untilPart}.`,
+          ),
+          { status: 409 },
+        );
+      }
     }
   }
-  assertAnnualScheduleAllowsBooking(avail, bookingDate);
+  if (!manualOpenToday) assertAnnualScheduleAllowsBooking(avail, bookingDate);
 
   if (!shops[0].upi_qr_url)
     throw Object.assign(new Error("This shop can't take bookings yet."), {
@@ -252,7 +276,7 @@ async function validateSelection(
     });
 
   const [barbers] = await connection.query(
-    "SELECT id,status FROM barbers WHERE id=? AND shop_id=? LIMIT 1",
+    "SELECT id,status,queue_limit FROM barbers WHERE id=? AND shop_id=? LIMIT 1",
     [barberId, shopId],
   );
   if (!barbers.length)
@@ -332,48 +356,150 @@ async function validateSelection(
     throw Object.assign(new Error("A valid payment amount is required."), {
       status: 400,
     });
-
+  if (!scheduledTime && bookingDate === localDateKey()) {
+    const limit = Number(barbers[0].queue_limit || 0);
+    const [active] = await connection.query(
+      `SELECT COUNT(*) AS total, COALESCE(SUM(duration_minutes),0) AS minutes
+       FROM payment_bookings
+       WHERE shop_id=? AND barber_id=? AND status='accepted'
+         AND queue_status IN ('Waiting','Your Turn','In Service')`,
+      [shopId, barberId],
+    );
+    const expectedWait = Number(active[0].minutes || 0);
+    if (Number(active[0].total || 0) >= limit)
+      throw Object.assign(
+        new Error(
+          `Cannot take in queue till for next ${expectedWait} minutes, as queue is full.`,
+        ),
+        { status: 409 },
+      );
+    const [nextAppointment] = await connection.query(
+      `SELECT scheduled_time FROM payment_bookings
+       WHERE shop_id=? AND barber_id=? AND booking_date=? AND scheduled_time IS NOT NULL
+         AND (
+           status IN ('payment_submitted','accepted')
+           AND COALESCE(queue_status, '') NOT IN
+             ('Cancelled','Completed','No Show')
+         )
+         AND scheduled_time > TIME(NOW())
+       ORDER BY scheduled_time ASC LIMIT 1`,
+      [shopId, barberId, bookingDate],
+    );
+    if (nextAppointment.length) {
+      const now = localTimeKey();
+      const toMinutes = (value) =>
+        Number(String(value).slice(0, 2)) * 60 +
+        Number(String(value).slice(3, 5));
+      if (
+        expectedWait + duration >
+        toMinutes(nextAppointment[0].scheduled_time) - toMinutes(now)
+      )
+        throw Object.assign(
+          new Error(
+            `Cannot take in queue till for next ${expectedWait} minutes, as queue is full.`,
+          ),
+          { status: 409 },
+        );
+    }
+  }
+  await validateScheduledSlot(connection, {
+    shop: shops[0],
+    barberId,
+    bookingDate,
+    scheduledTime,
+    duration,
+  });
   return { shop: shops[0], services, customer: users[0], amount, duration };
 }
 
 const jsonIds = (value) => {
   if (Array.isArray(value)) return value.map(String);
-  try { return JSON.parse(value || "[]").map(String); } catch { return []; }
+  try {
+    return JSON.parse(value || "[]").map(String);
+  } catch {
+    return [];
+  }
 };
-const money = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+const money = (value) =>
+  Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 
-async function evaluateScheme(connection, { shopId, barberId, serviceIds, services, customerId, promoCode, schemeId, lock = false }) {
-  const code = String(promoCode || "").trim().toUpperCase();
+async function evaluateScheme(
+  connection,
+  {
+    shopId,
+    barberId,
+    serviceIds,
+    services,
+    customerId,
+    promoCode,
+    schemeId,
+    lock = false,
+  },
+) {
+  const code = String(promoCode || "")
+    .trim()
+    .toUpperCase();
   let sql = `SELECT * FROM schemes WHERE shop_id=? AND status='active'
     AND starts_at<=UTC_TIMESTAMP() AND ends_at>=UTC_TIMESTAMP()`;
   const params = [shopId];
-  if (schemeId) { sql += " AND id=?"; params.push(schemeId); }
-  else if (code) { sql += " AND UPPER(promo_code)=?"; params.push(code); }
-  else sql += " AND promo_code IS NULL";
+  if (schemeId) {
+    sql += " AND id=?";
+    params.push(schemeId);
+  } else if (code) {
+    sql += " AND UPPER(promo_code)=?";
+    params.push(code);
+  } else sql += " AND promo_code IS NULL";
   sql += lock ? " FOR UPDATE" : "";
   const [candidates] = await connection.query(sql, params);
   if (!candidates.length && code)
-    throw Object.assign(new Error("This promo code is not active or valid for this booking."), { status: 400 });
+    throw Object.assign(
+      new Error("This promo code is not active or valid for this booking."),
+      { status: 400 },
+    );
   if (schemeId && !candidates.length)
-    throw Object.assign(new Error("This offer is no longer valid. Request a new payment quote."), { status: 409 });
+    throw Object.assign(
+      new Error("This offer is no longer valid. Request a new payment quote."),
+      { status: 409 },
+    );
 
-  const serviceById = new Map(services.map((service) => [String(service.id), service]));
-  const baseAmount = money(services.reduce((sum, service) => sum + Number(service.price), 0));
+  const serviceById = new Map(
+    services.map((service) => [String(service.id), service]),
+  );
+  const baseAmount = money(
+    services.reduce((sum, service) => sum + Number(service.price), 0),
+  );
   let bestAutomatic = null;
   for (const offer of candidates) {
     const eligibleServiceIds = offer.all_services
       ? serviceIds
       : jsonIds(offer.service_ids_json).filter((id) => serviceById.has(id));
     if (!eligibleServiceIds.length) {
-      if (code || schemeId) throw Object.assign(new Error("This offer does not apply to the selected services."), { status: 400 });
+      if (code || schemeId)
+        throw Object.assign(
+          new Error("This offer does not apply to the selected services."),
+          { status: 400 },
+        );
       continue;
     }
-    if (!offer.all_barbers && !jsonIds(offer.barber_ids_json).includes(String(barberId))) {
-      if (code || schemeId) throw Object.assign(new Error("This offer does not apply to the selected barber."), { status: 400 });
+    if (
+      !offer.all_barbers &&
+      !jsonIds(offer.barber_ids_json).includes(String(barberId))
+    ) {
+      if (code || schemeId)
+        throw Object.assign(
+          new Error("This offer does not apply to the selected barber."),
+          { status: 400 },
+        );
       continue;
     }
     if (baseAmount < Number(offer.minimum_amount || 0)) {
-      if (code || schemeId) throw Object.assign(new Error(`This offer requires a minimum booking amount of ₹${Number(offer.minimum_amount).toFixed(2)}.`), { status: 400 });
+      if (code || schemeId)
+        throw Object.assign(
+          new Error(
+            `This offer requires a minimum booking amount of ₹${Number(offer.minimum_amount).toFixed(2)}.`,
+          ),
+          { status: 400 },
+        );
       continue;
     }
     const [useRows] = await connection.query(
@@ -383,23 +509,47 @@ async function evaluateScheme(connection, { shopId, barberId, serviceIds, servic
     );
     const uses = Number(useRows[0]?.uses || 0);
     const customerUses = Number(useRows[0]?.customer_uses || 0);
-    if ((offer.usage_limit != null && uses >= Number(offer.usage_limit)) ||
-        (offer.per_customer_limit != null && customerUses >= Number(offer.per_customer_limit))) {
-      if (code || schemeId) throw Object.assign(new Error("This offer has reached its redemption limit."), { status: 409 });
+    if (
+      (offer.usage_limit != null && uses >= Number(offer.usage_limit)) ||
+      (offer.per_customer_limit != null &&
+        customerUses >= Number(offer.per_customer_limit))
+    ) {
+      if (code || schemeId)
+        throw Object.assign(
+          new Error("This offer has reached its redemption limit."),
+          { status: 409 },
+        );
       continue;
     }
-    const eligibleSubtotal = money(eligibleServiceIds.reduce((sum, id) => sum + Number(serviceById.get(id).price), 0));
-    let discount = offer.discount_type === "percentage"
-      ? money(eligibleSubtotal * Number(offer.discount_value) / 100)
-      : Math.min(eligibleSubtotal, Number(offer.discount_value));
-    if (offer.maximum_discount != null) discount = Math.min(discount, Number(offer.maximum_discount));
+    const eligibleSubtotal = money(
+      eligibleServiceIds.reduce(
+        (sum, id) => sum + Number(serviceById.get(id).price),
+        0,
+      ),
+    );
+    let discount =
+      offer.discount_type === "percentage"
+        ? money((eligibleSubtotal * Number(offer.discount_value)) / 100)
+        : Math.min(eligibleSubtotal, Number(offer.discount_value));
+    if (offer.maximum_discount != null)
+      discount = Math.min(discount, Number(offer.maximum_discount));
     discount = money(Math.min(discount, eligibleSubtotal, baseAmount));
     if (discount >= baseAmount) {
-      if (code || schemeId) throw Object.assign(new Error("This offer cannot reduce the booking to a zero payment."), { status: 400 });
+      if (code || schemeId)
+        throw Object.assign(
+          new Error("This offer cannot reduce the booking to a zero payment."),
+          { status: 400 },
+        );
       continue;
     }
     if (discount <= 0) {
-      if (code || schemeId) throw Object.assign(new Error("This offer does not provide a discount for the selected services."), { status: 400 });
+      if (code || schemeId)
+        throw Object.assign(
+          new Error(
+            "This offer does not provide a discount for the selected services.",
+          ),
+          { status: 400 },
+        );
       continue;
     }
     const eligible = {
@@ -409,15 +559,28 @@ async function evaluateScheme(connection, { shopId, barberId, serviceIds, servic
       discountedSubtotal: money(baseAmount - discount),
       promoCode: offer.promo_code || "",
       scheme: {
-        id: offer.id, title: offer.title, discountType: offer.discount_type,
+        id: offer.id,
+        title: offer.title,
+        discountType: offer.discount_type,
         discountValue: Number(offer.discount_value),
       },
     };
     if (code || schemeId) return eligible;
-    if (!bestAutomatic || eligible.discountAmount > bestAutomatic.discountAmount) bestAutomatic = eligible;
+    if (
+      !bestAutomatic ||
+      eligible.discountAmount > bestAutomatic.discountAmount
+    )
+      bestAutomatic = eligible;
   }
   if (bestAutomatic) return bestAutomatic;
-  return { schemeId: null, discountAmount: 0, originalAmount: baseAmount, discountedSubtotal: baseAmount, promoCode: "", scheme: null };
+  return {
+    schemeId: null,
+    discountAmount: 0,
+    originalAmount: baseAmount,
+    discountedSubtotal: baseAmount,
+    promoCode: "",
+    scheme: null,
+  };
 }
 
 function requestedBookingDate(value) {
@@ -445,6 +608,111 @@ function requestedBookingDate(value) {
       status: 400,
     });
   return date;
+}
+
+function requestedScheduledTime(value, bookingDate) {
+  const time = String(value || "").trim();
+  if (!time) return null;
+  if (bookingDate !== localDateKey())
+    throw Object.assign(
+      new Error("Same-day scheduling is available for today only."),
+      { status: 400 },
+    );
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time))
+    throw Object.assign(new Error("Select a valid appointment time."), {
+      status: 400,
+    });
+  if (time <= localTimeKey())
+    throw Object.assign(new Error("Choose a future appointment time."), {
+      status: 409,
+    });
+  return time;
+}
+
+function clockMinutes(value, fallback) {
+  const match = String(value || fallback).trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (
+    !Number.isInteger(hours) ||
+    !Number.isInteger(minutes) ||
+    hours > 23 ||
+    minutes > 59
+  )
+    return null;
+  return hours * 60 + minutes;
+}
+
+async function validateScheduledSlot(
+  connection,
+  { shop, barberId, bookingDate, scheduledTime, duration },
+) {
+  if (!scheduledTime) return;
+  const availability =
+    typeof shop.availability_json === "string"
+      ? JSON.parse(shop.availability_json || "{}")
+      : shop.availability_json || {};
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Kolkata",
+    weekday: "short",
+  }).format(new Date(`${bookingDate}T12:00:00Z`));
+  const annual = availability.annualSchedules?.[bookingDate];
+  const schedule = availability.schedule?.[weekday];
+  const shifts = availability.operationalHours?.enabled
+    ? [
+        {
+          open: availability.operationalHours.open,
+          close: availability.operationalHours.close,
+        },
+      ]
+    : annual && ["half_day", "special_hours"].includes(annual.type)
+      ? [{ open: annual.open, close: annual.close }]
+      : schedule?.shifts?.length
+        ? schedule.shifts
+        : [
+            {
+              open: schedule?.open || "09:00",
+              close: schedule?.close || "21:00",
+            },
+          ];
+  const start = clockMinutes(scheduledTime);
+  const end = start + Number(duration);
+  const fits = shifts.some((shift) => {
+    const open = clockMinutes(shift.open, "09:00");
+    const close = clockMinutes(shift.close, "21:00");
+    return (
+      start !== null &&
+      open !== null &&
+      close !== null &&
+      start >= open &&
+      end <= close
+    );
+  });
+  if (!fits)
+    throw Object.assign(
+      new Error(
+        "That appointment would fall outside the shop's operating hours.",
+      ),
+      { status: 409 },
+    );
+  const [conflicts] = await connection.query(
+    `SELECT id FROM payment_bookings
+     WHERE shop_id=? AND barber_id=? AND booking_date=? AND scheduled_time IS NOT NULL
+       AND (
+         status IN ('payment_submitted','accepted')
+         AND COALESCE(queue_status, '') NOT IN
+           ('Cancelled','Completed','No Show')
+       )
+       AND scheduled_time < ADDTIME(?, SEC_TO_TIME(duration_minutes * 60))
+       AND ADDTIME(scheduled_time, SEC_TO_TIME(? * 60)) > ? LIMIT 1`,
+    [shop.id, barberId, bookingDate, scheduledTime, duration, scheduledTime],
+  );
+  if (conflicts.length)
+    throw Object.assign(
+      new Error("That time overlaps another scheduled appointment."),
+      { status: 409 },
+    );
 }
 
 async function chooseAmount(connection, shopId, baseAmount) {
@@ -496,6 +764,15 @@ export async function paymentQuote(req, res) {
     } catch (error) {
       return res.status(error.status).json({ message: error.message });
     }
+    let scheduledTime;
+    try {
+      scheduledTime = requestedScheduledTime(
+        req.body?.scheduledTime,
+        bookingDate,
+      );
+    } catch (error) {
+      return res.status(error.status).json({ message: error.message });
+    }
     const serviceIds = [
       ...new Set(
         (Array.isArray(req.body?.serviceIds) ? req.body.serviceIds : []).map(
@@ -504,15 +781,13 @@ export async function paymentQuote(req, res) {
       ),
     ].sort();
     if (!shopId || !barberId || !serviceIds.length)
-      return res
-        .status(400)
-        .json({
-          message: "Shop, barber and at least one service are required.",
-        });
+      return res.status(400).json({
+        message: "Shop, barber and at least one service are required.",
+      });
 
     const { shop, services, customer, amount } = await validateSelection(
       connection,
-      { shopId, barberId, serviceIds, customerId, bookingDate },
+      { shopId, barberId, serviceIds, customerId, bookingDate, scheduledTime },
     );
     const who = beneficiaryFrom(req.body, customer);
     if (who.error) return res.status(400).json({ message: who.error });
@@ -524,36 +799,42 @@ export async function paymentQuote(req, res) {
       [customerId, who.key],
     );
     if (pending.length)
-      return res
-        .status(409)
-        .json({
-          message: "You already have a payment waiting for this booking.",
-          bookingId: pending[0].id,
-        });
+      return res.status(409).json({
+        message: "You already have a payment waiting for this booking.",
+        bookingId: pending[0].id,
+      });
 
     const [blocked] = await connection.query(
       "SELECT id FROM payment_bookings WHERE shop_id=? AND customer_id=? AND status='rejected' AND declined_until > NOW() ORDER BY declined_until DESC LIMIT 1",
       [shopId, customerId],
     );
     if (blocked.length)
-      return res
-        .status(429)
-        .json({
-          message:
-            "This booking cannot be retried for 30 minutes after a declined payment.",
-          bookingId: blocked[0].id,
-        });
+      return res.status(429).json({
+        message:
+          "This booking cannot be retried for 30 minutes after a declined payment.",
+        bookingId: blocked[0].id,
+      });
 
     const applied = await evaluateScheme(connection, {
-      shopId, barberId, serviceIds, services, customerId, promoCode: req.body?.promoCode,
+      shopId,
+      barberId,
+      serviceIds,
+      services,
+      customerId,
+      promoCode: req.body?.promoCode,
     });
-    const finalAmount = await chooseAmount(connection, shopId, applied.discountedSubtotal);
+    const finalAmount = await chooseAmount(
+      connection,
+      shopId,
+      applied.discountedSubtotal,
+    );
     const quotePayload = {
       customerId,
       shopId,
       barberId,
       serviceIds,
       bookingDate,
+      scheduledTime,
       beneficiaryKey: who.key,
       amount: finalAmount,
       originalAmount: applied.originalAmount,
@@ -591,6 +872,10 @@ export async function submitPayment(req, res) {
     const shopId = String(req.body?.shopId || "");
     const barberId = String(req.body?.barberId || "");
     const bookingDate = requestedBookingDate(req.body?.bookingDate);
+    const scheduledTime = requestedScheduledTime(
+      req.body?.scheduledTime,
+      bookingDate,
+    );
     const serviceIds = [
       ...new Set(
         (Array.isArray(req.body?.serviceIds) ? req.body.serviceIds : []).map(
@@ -626,6 +911,7 @@ export async function submitPayment(req, res) {
       serviceIds,
       bookingDate,
       customerId,
+      scheduledTime,
     });
     const who = beneficiaryFrom(req.body, customer);
     if (who.error) throw Object.assign(new Error(who.error), { status: 400 });
@@ -661,6 +947,7 @@ export async function submitPayment(req, res) {
       quote.shopId === shopId &&
       quote.barberId === barberId &&
       quote.bookingDate === bookingDate &&
+      quote.scheduledTime === scheduledTime &&
       quote.beneficiaryKey === who.key &&
       quote.qrUrl === shop.upi_qr_url &&
       JSON.stringify(quote.serviceIds) === JSON.stringify(serviceIds);
@@ -673,13 +960,26 @@ export async function submitPayment(req, res) {
       );
 
     const applied = await evaluateScheme(connection, {
-      shopId, barberId, serviceIds, services, customerId,
-      promoCode: quote.promoCode, schemeId: quote.schemeId, lock: Boolean(quote.schemeId),
+      shopId,
+      barberId,
+      serviceIds,
+      services,
+      customerId,
+      promoCode: quote.promoCode,
+      schemeId: quote.schemeId,
+      lock: Boolean(quote.schemeId),
     });
-    if (money(applied.originalAmount) !== money(quote.originalAmount) ||
-        money(applied.discountAmount) !== money(quote.discountAmount) ||
-        money(applied.discountedSubtotal) !== money(quote.discountedSubtotal))
-      throw Object.assign(new Error("Offer eligibility or discount changed. Reopen the payment screen for an updated quote."), { status: 409 });
+    if (
+      money(applied.originalAmount) !== money(quote.originalAmount) ||
+      money(applied.discountAmount) !== money(quote.discountAmount) ||
+      money(applied.discountedSubtotal) !== money(quote.discountedSubtotal)
+    )
+      throw Object.assign(
+        new Error(
+          "Offer eligibility or discount changed. Reopen the payment screen for an updated quote.",
+        ),
+        { status: 409 },
+      );
 
     const finalAmount = Number(quote.amount);
     if (!Number.isFinite(finalAmount) || finalAmount <= 0)
@@ -694,6 +994,8 @@ export async function submitPayment(req, res) {
         barberId,
         serviceIds.join(","),
         bookingDate,
+        scheduledTime || "",
+        scheduledTime,
         who.key,
         finalAmount.toFixed(2),
       ].join("|"),
@@ -715,35 +1017,36 @@ export async function submitPayment(req, res) {
       );
 
     await connection.query(
-  `INSERT INTO payment_bookings
+      `INSERT INTO payment_bookings
    (
-     id, shop_id, barber_id, customer_id, booking_date, service_ids_json,
+     id, shop_id, barber_id, customer_id, booking_date, scheduled_time, service_ids_json,
      amount, original_amount, discount_amount, scheme_id, duration_minutes, beneficiary_json, beneficiary_key,
      request_hash, payment_method, status, payer_name, payment_submitted_at
    )
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-  [
-    bookingId,
-    shopId,
-    barberId,
-    customerId,
-    bookingDate,
-    JSON.stringify(serviceIds),
-    finalAmount,
-    applied.originalAmount,
-    applied.discountAmount,
-    applied.schemeId,
-    duration,
-    JSON.stringify(who.person),
-    who.key,
-    requestHash,
-    "upi_qr",
-    "payment_submitted",
-    String(req.body?.payerName || "").trim().slice(0, 120) ||
-      customer.name,
-  ],
-);
-
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        bookingId,
+        shopId,
+        barberId,
+        customerId,
+        bookingDate,
+        scheduledTime,
+        JSON.stringify(serviceIds),
+        finalAmount,
+        applied.originalAmount,
+        applied.discountAmount,
+        applied.schemeId,
+        duration,
+        JSON.stringify(who.person),
+        who.key,
+        requestHash,
+        "upi_qr",
+        "payment_submitted",
+        String(req.body?.payerName || "")
+          .trim()
+          .slice(0, 120) || customer.name,
+      ],
+    );
 
     await connection.commit();
 
@@ -779,14 +1082,13 @@ export async function submitPayment(req, res) {
 
     res.status(201).json({ booking });
   } catch (error) {
+    console.log(error);
     await connection.rollback().catch(() => {});
-    res
-      .status(error.status || 500)
-      .json({
-        message: error.message || "Could not submit the payment.",
-        bookingId: error.bookingId,
-        amount: error.amount,
-      });
+    res.status(error.status || 500).json({
+      message: error.message || "Could not submit the payment.",
+      bookingId: error.bookingId,
+      amount: error.amount,
+    });
   } finally {
     connection.release();
   }

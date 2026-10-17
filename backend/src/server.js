@@ -13,6 +13,7 @@ import complaintRoutes from "./routes/complaintRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
 import schemeRoutes from "./routes/schemeRoutes.js";
 import "./jobs/emergencyClosureQueue.js";
+import { startScheduledQueueWorker } from "./services/scheduledQueueService.js";
 dotenv.config();
 
 if (!process.env.JWT_SECRET) {
@@ -73,7 +74,9 @@ app.use((err, _req, res, _next) => {
     .json({ message: err.message || "Server error." });
 });
 
-ensureSchema().catch((e) => console.error("Schema check failed:", e.message));
+ensureSchema()
+  .then(() => startScheduledQueueWorker())
+  .catch((e) => console.error("Schema check failed:", e.message));
 
 app.listen(Number(process.env.PORT || 4000), () =>
   console.log(

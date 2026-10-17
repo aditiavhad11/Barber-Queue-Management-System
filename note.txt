@@ -2,3 +2,25 @@ Page Refreshement,
 
 close krne pe, q ke log htne pe complete nhi aana chahiye.
 
+while adding the new shop system should also ask for the queue limits (always positive number). for each barber. 
+This queue size will be in use.
+customer should be able to book today for any time if shop is not closed, until the queue is opened and schedule his timing.
+
+when user books his schedule for a particular time for today to a barber then in my queue page as your booking will be in [HH : MM] this notice always be on the top.
+
+the main thing is when the schedule is booked for a customer of let say 5:00 PM. and the crowd is started coming to the shop from 4 pm, then the there should be enough place in the queue to store those today's prescheduled customer, the queue should not take them there and should be blocked.
+
+The blocking queue should be based on the timing. like A has booked a slot for 5 Pm. and then at 4 pm when customer started booking then they should allowed to book the services which can be completed before 5 PM, so that 5 pm slot remain empty and scheduled customer get the fair chance.
+
+if customer at 4:30 booked a for message taking 20 minutes and cutting taking 30 mins then his service will take 50 min in total but from 4 : 30 it is 30 min away from scheduled time so system should allow only one service to added there and on that customer addition in queue, the queue size is blocked if it reeaches limit -1 because currently there is only one scheduling for today. But if the queue size is not about to full then it will be unblocked and able to take booking.
+
+The customer who scheduled who scheduled for certain time for today, should be automatically pushed in the queue, when the queue already has x no. of customer whose service will nearly take y time and current time + y = scheduled time for that customer. 
+This automation should be there. 
+
+Also when customer fills in the queue normally, and if the queue reaches the limits then it should be blocked and not able to take new bookings 
+
+
+whenever the queue is blocked a toast should appear on customer side when they try to book as 
+Cannot take in queue till for next ${current customer service expected time set by owner}, as queue is full. 
+
+

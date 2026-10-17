@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS barbers (
   experience_years INT UNSIGNED DEFAULT 0,
   specialization VARCHAR(180),
   working_days_json JSON NULL,
+  queue_limit INT UNSIGNED NOT NULL DEFAULT 10,
   rating DECIMAL(3,2) NOT NULL DEFAULT 0,
   status ENUM('Available','On Break','Unavailable') NOT NULL DEFAULT 'Available',
   photo_url TEXT,
@@ -289,6 +290,7 @@ CREATE TABLE IF NOT EXISTS payment_bookings (
   barber_id CHAR(36) NOT NULL,
   customer_id CHAR(36) NOT NULL,
   booking_date DATE NULL,
+  scheduled_time TIME NULL,
   service_ids_json JSON NOT NULL,
   amount DECIMAL(10,2) NOT NULL,
   original_amount DECIMAL(10,2) NULL,
@@ -327,7 +329,8 @@ CREATE TABLE IF NOT EXISTS payment_bookings (
   INDEX idx_booking_shop_status (shop_id, status),
   INDEX idx_booking_customer (customer_id, status),
   INDEX idx_booking_request (customer_id, request_hash, status),
-  INDEX idx_booking_scheme_status (scheme_id,status)
+  INDEX idx_booking_scheme_status (scheme_id,status),
+  INDEX idx_booking_scheduled_queue (booking_date,queue_status,barber_id)
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS emergency_closure_notifications (

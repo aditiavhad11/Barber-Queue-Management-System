@@ -97,6 +97,13 @@ export async function ensureSchema() {
   );
   await ensureColumn("payment_bookings", "completed_at", "DATETIME NULL");
   await ensureColumn("payment_bookings", "booking_date", "DATE NULL");
+  await ensureColumn("payment_bookings", "scheduled_time", "TIME NULL");
+  await ensureColumn("barbers", "queue_limit", "INT UNSIGNED NOT NULL DEFAULT 10");
+  await pool.query(
+    "CREATE INDEX idx_booking_scheduled_queue ON payment_bookings (booking_date,queue_status,barber_id)",
+  ).catch((error) => {
+    if (error.code !== "ER_DUP_KEYNAME") throw error;
+  });
   await ensureColumn(
     "payment_bookings",
     "closure_choice",

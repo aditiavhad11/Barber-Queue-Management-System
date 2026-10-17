@@ -23,7 +23,7 @@ import {
 } from "../../utils/closedDays";
 import { ACCEPTED, MAX_MB, uploadImages } from "../../services/upload";
 import { api } from "../../services/api";
-import { notifyError, notifySuccess } from "../../utils/toast";
+import { errorMessage, notifyError, notifySuccess } from "../../utils/toast";
 import {
   isValidShopName,
   isValidPhone,
@@ -60,6 +60,7 @@ const newBarber = () => ({
   services: [],
   workingDays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
   status: "Available",
+  queueLimit: 10,
   photo: "",
 });
 
@@ -190,6 +191,8 @@ export default function CreateShop() {
         "Add a valid name (2 to 60 alphabetic characters) for every barber.";
     if (barbers.some((b) => !b.services.length))
       x.barberServices = "Assign at least one service to every barber.";
+    if (barbers.some((b) => !Number.isInteger(Number(b.queueLimit)) || Number(b.queueLimit) <= 0))
+      x.queueLimit = "Queue capacity must be a positive whole number for every barber.";
     if (barbers.some((b) => b.phone && !isValidPhone(b.phone)))
       x.barberPhone =
         "Each barber phone must be a valid 10-digit mobile number.";
@@ -231,7 +234,12 @@ export default function CreateShop() {
         x.coOwnerPassword = "Password must be at least 6 characters.";
     }
     setErrs(x);
-    if (Object.keys(x).length) return;
+    if (Object.keys(x).length) {
+      notifyError(
+        Object.values(x)[0] || "Please correct the highlighted fields.",
+      );
+      return;
+    }
     setSaving(true);
     const services = svc.map((s) => ({
       id: s.id,
@@ -302,9 +310,7 @@ export default function CreateShop() {
       notifySuccess("Shop submitted for approval.");
       nav("/owner/shops");
     } catch (error) {
-      // API failures already surface through the global error toast.
-      if (!error?.response)
-        notifyError(error.message || "Could not create the shop.");
+      notifyError(errorMessage(error, "Could not submit the shop for approval."));
     } finally {
       setSaving(false);
     }
@@ -555,6 +561,25 @@ export default function CreateShop() {
                 </div>
                 <div>
                   <label className="text-[11px] font-medium text-coffee/70 mb-1 block">
+                    Queue capacity
+                  </label>
+                  <input
+                    className="input"
+                    type="number"
+                    min={1}
+                    step={1}
+                    placeholder="Customers"
+                    value={b.queueLimit}
+                    onChange={(e) =>
+                      updateBarber(b.id, {
+                        queueLimit:
+                          e.target.value === "" ? "" : Math.max(1, Math.floor(Number(e.target.value))),
+                      })
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-medium text-coffee/70 mb-1 block">
                     Specialization
                   </label>
                   <input
@@ -642,6 +667,7 @@ export default function CreateShop() {
           ))}
           <Err k="barbers" />
           <Err k="barberServices" />
+          <Err k="queueLimit" />
         </div>
       </div>
       <H n="06" t="Services" />

@@ -49,6 +49,14 @@ export default function MyQueue() {
     () => customerQueues.filter((q) => activeStatuses.includes(q.entry.status)),
     [customerQueues],
   );
+  const scheduledNoticeEntry = customerQueues.find(
+    (q) =>
+      q.entry.isSameDayScheduled &&
+      q.entry.scheduledTime &&
+      !["Completed", "Cancelled", "Skipped", "No Show"].includes(
+        q.entry.status,
+      ),
+  )?.entry;
   const selected =
     customerQueues.find((q) => q.entry.id === selectedId) ||
     activeBookings[0] ||
@@ -161,8 +169,8 @@ export default function MyQueue() {
             <p className="label !text-gold-light">Booking received</p>
             <h1 className="text-3xl mt-2">Waiting for shop confirmation</h1>
             <p className="text-sm text-coffee/70 mt-2">
-              Your payment was submitted. Your queue ticket will appear here
-              as soon as the shop confirms it.
+              Your payment was submitted. Your queue ticket will appear here as
+              soon as the shop confirms it.
             </p>
           </div>
         ) : (
@@ -176,6 +184,10 @@ export default function MyQueue() {
   if (!selected) return null;
 
   const { shop, barber, entry } = selected;
+  const sameDayNotice =
+    entry.isSameDayScheduled &&
+    entry.scheduledTime &&
+    !["Completed", "Cancelled", "Skipped", "No Show"].includes(entry.status);
   const services = entry.services?.length
     ? entry.services
     : [selected.service].filter(Boolean);
@@ -285,6 +297,7 @@ export default function MyQueue() {
       setRequestKey("");
       await refreshBookings();
     } catch (error) {
+      console.error(error);
       setAddServiceError(
         error.response?.data?.message ||
           error.message ||
@@ -304,6 +317,12 @@ export default function MyQueue() {
   return (
     <div className="fade max-w-5xl">
       <AwaitingBookings />
+      {(scheduledNoticeEntry || sameDayNotice) && (
+        <div className="border border-brass bg-brass/10 p-4 mb-5 font-medium">
+          Your booking will be in{" "}
+          {(scheduledNoticeEntry || entry).scheduledTime}.
+        </div>
+      )}
       <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
         <div>
           <p className="label">My queue</p>
@@ -379,7 +398,7 @@ export default function MyQueue() {
           >
             {entry.status}
           </Badge>
-          {["Waiting", "Your Turn"].includes(entry.status) &&
+          {entry.status === "Your Turn" &&
             position === 1 && (
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm text-gold">

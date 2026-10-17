@@ -67,6 +67,10 @@ export async function hydrateBookings(rows) {
       barberName: row.barber_name || "",
       customerId: row.customer_id,
       bookingDate: row.booking_date_string || iso(row.created_at)?.slice(0, 10),
+      scheduledTime: row.scheduled_time ? String(row.scheduled_time).slice(0, 5) : null,
+      isSameDayScheduled: Boolean(row.scheduled_time && row.booking_date_string === new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Kolkata",
+      }).format(new Date())),
       customerName: row.customer_name || "",
       serviceIds,
       services: serviceIds

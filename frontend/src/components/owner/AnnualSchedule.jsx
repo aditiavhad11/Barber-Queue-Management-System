@@ -131,6 +131,10 @@ export default function AnnualSchedule({ shop, shops = [], onSave }) {
           );
         })}
       </div>
+      <p className="text-xs text-coffee/60 mt-3">
+        Select a date to add or change an exception. Removing an exception
+        restores the shop&apos;s regular weekly hours for that date.
+      </p>
       <div className="grid md:grid-cols-5 gap-3 mt-4">
         <label className="block text-sm md:col-span-2">
           Schedule type
@@ -198,8 +202,14 @@ export default function AnnualSchedule({ shop, shops = [], onSave }) {
                 {item.type !== "closed" ? ` ${item.open}-${item.close}` : ""}
                 {item.note ? ` - ${item.note}` : ""}
               </span>
-              <button className="btn-ghost text-rose" type="button" onClick={() => remove(date)}>
+              <button
+                className="btn-ghost text-rose flex items-center gap-2"
+                type="button"
+                onClick={() => remove(date)}
+                aria-label={`Open shop and cancel schedule for ${formatDateDisplay(date, true)}`}
+              >
                 <Trash2 size={14} />
+                <span>Open / cancel exception</span>
               </button>
             </div>
           ))}
