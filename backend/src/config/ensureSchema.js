@@ -43,6 +43,11 @@ export async function ensureSchema() {
     description TEXT NOT NULL,
     image_url TEXT NULL,
     terms TEXT NULL,
+    offer_type VARCHAR(20) NOT NULL DEFAULT 'discount',
+    buy_quantity INT UNSIGNED NULL,
+    free_quantity INT UNSIGNED NULL,
+    required_service_quantities_json JSON NULL,
+    reward_service_id CHAR(36) NULL,
     discount_type ENUM('percentage','fixed') NOT NULL,
     discount_value DECIMAL(10,2) NOT NULL,
     starts_at DATETIME NULL,
@@ -64,6 +69,13 @@ export async function ensureSchema() {
     INDEX idx_scheme_shop_status (shop_id,status,starts_at,ends_at)
   ) ENGINE=InnoDB`);
   await ensureColumn("payment_bookings", "original_amount", "DECIMAL(10,2) NULL");
+  await ensureColumn("schemes", "offer_type", "VARCHAR(20) NOT NULL DEFAULT 'discount'");
+  await ensureColumn("schemes", "buy_quantity", "INT UNSIGNED NULL");
+  await ensureColumn("schemes", "free_quantity", "INT UNSIGNED NULL");
+  await ensureColumn("schemes", "required_service_quantities_json", "JSON NULL");
+  await ensureColumn("schemes", "reward_service_id", "CHAR(36) NULL");
+  await ensureColumn("payment_bookings", "service_quantities_json", "JSON NULL");
+  await ensureColumn("payment_bookings", "free_service_quantities_json", "JSON NULL");
   await ensureColumn("payment_bookings", "discount_amount", "DECIMAL(10,2) NOT NULL DEFAULT 0");
   await ensureColumn("payment_bookings", "scheme_id", "CHAR(36) NULL");
   await pool.query("CREATE INDEX idx_booking_scheme_status ON payment_bookings (scheme_id,status)").catch((error) => {

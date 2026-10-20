@@ -554,6 +554,7 @@ export default function MyQueue() {
                   <span>₹{Number(service.price).toFixed(2)}</span>
                 </div>
               ))}
+              {(entry.freeServices || []).map((service) => <div key={`free-${service.id}`} className="flex justify-between gap-3 text-sm text-olive"><span>FREE: {service.name} × {service.quantity} · {service.duration * service.quantity} min</span><span>₹0.00</span></div>)}
               <div className="flex justify-between border-t border-khaki pt-2 font-medium">
                 <span>
                   Total ·{" "}

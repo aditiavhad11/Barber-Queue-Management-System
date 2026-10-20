@@ -35,7 +35,7 @@ export async function findBookings(
 export async function hydrateBookings(rows) {
   if (!rows.length) return [];
   const ids = [
-    ...new Set(rows.flatMap((row) => parse(row.service_ids_json, []))),
+    ...new Set(rows.flatMap((row) => [...parse(row.service_ids_json, []), ...Object.keys(parse(row.free_service_quantities_json, {}))])),
   ];
   let byId = new Map();
   let adjustmentsByBooking = new Map();
@@ -59,6 +59,8 @@ export async function hydrateBookings(rows) {
   }
   return rows.map((row) => {
     const serviceIds = parse(row.service_ids_json, []);
+    const quantities = parse(row.service_quantities_json, {});
+    const freeQuantities = parse(row.free_service_quantities_json, {});
     return {
       id: row.id,
       shopId: row.shop_id,
@@ -81,7 +83,11 @@ export async function hydrateBookings(rows) {
           name: x.name,
           price: Number(x.price),
           duration: Number(x.duration_minutes),
+          quantity: Number(quantities[String(x.id)] || 1),
         })),
+      freeServices: Object.entries(freeQuantities).map(([id, quantity]) => byId.get(id)).filter(Boolean).map((x) => ({ id: x.id, name: x.name, price: 0, retailPrice: Number(x.price), duration: Number(x.duration_minutes), quantity: Number(freeQuantities[String(x.id)] || 0) })),
+      serviceQuantities: quantities,
+      freeServiceQuantities: freeQuantities,
       amount: Number(row.amount),
       originalAmount: Number(row.original_amount ?? row.amount),
       discountAmount: Number(row.discount_amount || 0),

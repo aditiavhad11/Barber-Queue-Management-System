@@ -5,6 +5,10 @@ const parseIds = (value) => {
   if (Array.isArray(value)) return value.map(String);
   try { return JSON.parse(value || "[]").map(String); } catch { return []; }
 };
+const parseObject = (value) => {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  try { const parsed = JSON.parse(value || "{}"); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}; } catch { return {}; }
+};
 const bool = (value) => value === true || value === 1 || value === "1";
 const roundMoney = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 
@@ -16,6 +20,11 @@ function mapScheme(row) {
     description: row.description || "",
     imageUrl: row.image_url || "",
     terms: row.terms || "",
+    offerType: row.offer_type || "discount",
+    buyQuantity: row.buy_quantity == null ? null : Number(row.buy_quantity),
+    freeQuantity: row.free_quantity == null ? null : Number(row.free_quantity),
+    requiredQuantities: parseObject(row.required_service_quantities_json),
+    rewardServiceId: row.reward_service_id || "",
     discountType: row.discount_type,
     discountValue: Number(row.discount_value || 0),
     startsAt: row.starts_at_utc || row.starts_at || null,
@@ -42,11 +51,15 @@ async function ownerShop(req, shopId) {
   return rows.length > 0;
 }
 
-function validateInput(body, partial = false) {
+function validateInput(body, partial = false, isNewOffer = false) {
   const title = String(body.title ?? "").trim();
   const description = String(body.description ?? "").trim();
   const discountType = String(body.discountType ?? "percentage");
+  const offerType = String(body.offerType ?? "discount");
   const discountValue = Number(body.discountValue);
+  const buyQuantity = body.buyQuantity == null || body.buyQuantity === "" ? null : Number(body.buyQuantity);
+  const freeQuantity = body.freeQuantity == null || body.freeQuantity === "" ? null : Number(body.freeQuantity);
+  const rewardServiceId = String(body.rewardServiceId ?? "");
   const status = String(body.status ?? "draft");
   const promoCode = String(body.promoCode ?? "").trim().toUpperCase();
   const startsAt = body.startsAt ? new Date(body.startsAt) : null;
@@ -54,6 +67,7 @@ function validateInput(body, partial = false) {
   const allServices = body.allServices !== false;
   const allBarbers = body.allBarbers !== false;
   const serviceIds = [...new Set((Array.isArray(body.serviceIds) ? body.serviceIds : []).map(String))];
+  const requiredQuantities = body.requiredQuantities && typeof body.requiredQuantities === "object" ? body.requiredQuantities : {};
   const barberIds = [...new Set((Array.isArray(body.barberIds) ? body.barberIds : []).map(String))];
   const minimumAmount = Number(body.minimumAmount ?? 0);
   const maximumDiscount = body.maximumDiscount === "" || body.maximumDiscount == null ? null : Number(body.maximumDiscount);
@@ -70,7 +84,14 @@ function validateInput(body, partial = false) {
   if (!partial || body.status !== undefined) {
     if (!["draft", "active", "paused"].includes(status)) throw invalid("Choose Draft, Active, or Paused.");
   }
-  if (!partial || body.discountType !== undefined || body.discountValue !== undefined) {
+  if (!partial || body.offerType !== undefined || body.discountType !== undefined || body.discountValue !== undefined || body.buyQuantity !== undefined || body.freeQuantity !== undefined) {
+    if (!["discount", "bogo"].includes(offerType)) throw invalid("Choose a valid offer type.");
+    if (offerType === "bogo") {
+      if (!Number.isInteger(freeQuantity) || freeQuantity < 1 || freeQuantity > 100) throw invalid("Free quantity must be a whole number from 1 to 100.");
+      if (!serviceIds.length || allServices || !rewardServiceId) throw invalid("Choose the required services and the free reward service for this BOGO offer.");
+      if (Object.keys(requiredQuantities).length !== serviceIds.length || Object.keys(requiredQuantities).some((id) => !serviceIds.includes(String(id)))) throw invalid("Required service quantities must match the selected qualifying services.");
+      if (serviceIds.some((id) => !Number.isInteger(Number(requiredQuantities[id])) || Number(requiredQuantities[id]) < 1 || Number(requiredQuantities[id]) > 20)) throw invalid("Set a required quantity from 1 to 20 for every qualifying service.");
+    } else
     if (!["percentage", "fixed"].includes(discountType) || !Number.isFinite(discountValue) || discountValue <= 0 || (discountType === "percentage" && discountValue > 100))
       throw invalid("Enter a valid percentage (up to 100%) or fixed discount amount.");
   }
@@ -80,10 +101,16 @@ function validateInput(body, partial = false) {
     if (limit !== null && (!Number.isInteger(limit) || limit < 1)) throw invalid("Usage limits must be positive whole numbers.");
   if (promoCode && !/^[A-Z0-9_-]{3,32}$/.test(promoCode)) throw invalid("Promo codes must be 3 to 32 letters, numbers, hyphens, or underscores.");
   if ((startsAt && Number.isNaN(startsAt.getTime())) || (endsAt && Number.isNaN(endsAt.getTime()))) throw invalid("Enter valid offer start and end times.");
+  if (startsAt && endsAt && startsAt >= endsAt) throw invalid("End date must be later than start date.");
+  const now = new Date();
+  now.setSeconds(0, 0);
+  if (isNewOffer && startsAt && startsAt < now) throw invalid("Start date cannot be in the past for a new offer.");
+  if (isNewOffer && endsAt && endsAt < now) throw invalid("End date cannot be in the past for a new offer.");
   if (status !== "draft" && (!startsAt || !endsAt || startsAt >= endsAt)) throw invalid("Active or paused offers need an end time later than their start time.");
   return {
     title, description, terms: String(body.terms ?? "").trim().slice(0, 4000),
     imageUrl: String(body.imageUrl ?? "").trim().slice(0, 1000),
+    offerType, buyQuantity: offerType === "bogo" ? null : buyQuantity, freeQuantity, requiredQuantities, rewardServiceId,
     discountType, discountValue: Number.isFinite(discountValue) ? discountValue : 0,
     startsAt: startsAt ? startsAt.toISOString().slice(0, 19).replace("T", " ") : null,
     endsAt: endsAt ? endsAt.toISOString().slice(0, 19).replace("T", " ") : null,
@@ -93,13 +120,17 @@ function validateInput(body, partial = false) {
 }
 
 async function validateScope(connection, shopId, form) {
-  if (!form.allServices) {
+  if (!form.allServices || form.offerType === "bogo") {
     if (!form.serviceIds.length) throw Object.assign(new Error("Select at least one service or choose all services."), { status: 400 });
     const [rows] = await connection.query(
-      `SELECT id FROM services WHERE shop_id=? AND id IN (${form.serviceIds.map(() => "?").join(",")})`,
+      `SELECT id FROM services WHERE shop_id=? ${form.offerType === "bogo" ? "AND enabled=1 " : ""}AND id IN (${form.serviceIds.map(() => "?").join(",")})`,
       [shopId, ...form.serviceIds],
     );
     if (rows.length !== form.serviceIds.length) throw Object.assign(new Error("One or more services do not belong to this shop."), { status: 400 });
+  }
+  if (form.offerType === "bogo") {
+    const [reward] = await connection.query("SELECT id FROM services WHERE shop_id=? AND id=? AND enabled=1 LIMIT 1", [shopId, form.rewardServiceId]);
+    if (!reward.length) throw Object.assign(new Error("The free reward service must be an enabled service in this shop."), { status: 400 });
   }
   if (!form.allBarbers) {
     if (!form.barberIds.length) throw Object.assign(new Error("Select at least one barber or choose all barbers."), { status: 400 });
@@ -139,7 +170,7 @@ export async function listShopSchemes(req, res) {
 export async function createScheme(req, res) {
   const shopId = String(req.params.shopId || "");
   if (!(await ownerShop(req, shopId))) return res.status(404).json({ message: "Shop not found or not owned by this account." });
-  const form = validateInput(req.body || {});
+  const form = validateInput(req.body || {}, false, true);
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
@@ -150,10 +181,10 @@ export async function createScheme(req, res) {
     }
     const id = crypto.randomUUID();
     await connection.query(
-      `INSERT INTO schemes (id,shop_id,title,description,image_url,terms,discount_type,discount_value,starts_at,ends_at,
+      `INSERT INTO schemes (id,shop_id,title,description,image_url,terms,offer_type,buy_quantity,free_quantity,required_service_quantities_json,reward_service_id,discount_type,discount_value,starts_at,ends_at,
        all_services,service_ids_json,all_barbers,barber_ids_json,minimum_amount,maximum_discount,usage_limit,per_customer_limit,promo_code,status)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [id, shopId, form.title, form.description, form.imageUrl || null, form.terms || null, form.discountType, form.discountValue,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [id, shopId, form.title, form.description, form.imageUrl || null, form.terms || null, form.offerType, form.buyQuantity, form.freeQuantity, JSON.stringify(form.requiredQuantities), form.rewardServiceId || null, form.discountType, form.discountValue,
         form.startsAt, form.endsAt, form.allServices ? 1 : 0, JSON.stringify(form.serviceIds), form.allBarbers ? 1 : 0,
         JSON.stringify(form.barberIds), form.minimumAmount, form.maximumDiscount, form.usageLimit, form.perCustomerLimit, form.promoCode, form.status],
     );
@@ -182,9 +213,9 @@ export async function updateScheme(req, res) {
       if (dupes.length) throw Object.assign(new Error("That promo code is already used by this shop."), { status: 409 });
     }
     await connection.query(
-      `UPDATE schemes SET title=?,description=?,image_url=?,terms=?,discount_type=?,discount_value=?,starts_at=?,ends_at=?,
+      `UPDATE schemes SET title=?,description=?,image_url=?,terms=?,offer_type=?,buy_quantity=?,free_quantity=?,required_service_quantities_json=?,reward_service_id=?,discount_type=?,discount_value=?,starts_at=?,ends_at=?,
        all_services=?,service_ids_json=?,all_barbers=?,barber_ids_json=?,minimum_amount=?,maximum_discount=?,usage_limit=?,per_customer_limit=?,promo_code=?,status=? WHERE id=? AND shop_id=?`,
-      [form.title, form.description, form.imageUrl || null, form.terms || null, form.discountType, form.discountValue, form.startsAt,
+      [form.title, form.description, form.imageUrl || null, form.terms || null, form.offerType, form.buyQuantity, form.freeQuantity, JSON.stringify(form.requiredQuantities), form.rewardServiceId || null, form.discountType, form.discountValue, form.startsAt,
         form.endsAt, form.allServices ? 1 : 0, JSON.stringify(form.serviceIds), form.allBarbers ? 1 : 0, JSON.stringify(form.barberIds),
         form.minimumAmount, form.maximumDiscount, form.usageLimit, form.perCustomerLimit, form.promoCode, form.status, schemeId, shopId],
     );

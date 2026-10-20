@@ -199,9 +199,10 @@ export default function Queue() {
                   </span>
                 )}
                 <p className="text-soft mt-1">
-                  {b.services.map((x) => x.name).join(" + ")} with{" "}
+                  {b.services.map((x) => `${x.name}${x.quantity > 1 ? ` × ${x.quantity}` : ""}`).join(" + ")} with{" "}
                   {b.barberName} · {b.durationMinutes} min · ₹{b.amount}
                 </p>
+                {b.freeServices?.length > 0 && <p className="text-xs text-olive">FREE: {b.freeServices.map((x) => `${x.name} × ${x.quantity}`).join(", ")}</p>}
                 {b.bookingDate && (
                   <p className="text-md text-black mt-1">
                     Booking date: {b.bookingDate}

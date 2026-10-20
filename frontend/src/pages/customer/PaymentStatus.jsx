@@ -147,7 +147,7 @@ export default function PaymentStatus() {
         </div>
         <div>
           <dt className="label">Services</dt>
-          <dd className="mt-1">{services}</dd>
+          <dd className="mt-1">{services}{(booking.freeServices || []).map((service) => <div key={service.id} className="text-olive">FREE: {service.name} × {service.quantity}</div>)}</dd>
         </div>
         <div>
           <dt className="label">Amount</dt>

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { pool } from "../config/db.js";
+import { calculateBogoReward, barberCanFulfillBogo } from "../utils/bogoOffer.js";
 import {
   addNotification,
   findBookings,
@@ -152,6 +153,7 @@ async function validateSelection(
     shopId,
     barberId,
     serviceIds,
+    serviceQuantities,
     customerId,
     bookingDate,
     scheduledTime = null,
@@ -347,11 +349,8 @@ async function validateSelection(
       status: 403,
     });
 
-  const amount = services.reduce((sum, x) => sum + Number(x.price), 0);
-  const duration = services.reduce(
-    (sum, x) => sum + Number(x.duration_minutes),
-    0,
-  );
+  const amount = services.reduce((sum, x) => sum + Number(x.price) * serviceQuantities[String(x.id)], 0);
+  const duration = services.reduce((sum, x) => sum + Number(x.duration_minutes) * serviceQuantities[String(x.id)], 0);
   if (!(amount > 0))
     throw Object.assign(new Error("A valid payment amount is required."), {
       status: 400,
@@ -409,7 +408,7 @@ async function validateSelection(
     scheduledTime,
     duration,
   });
-  return { shop: shops[0], services, customer: users[0], amount, duration };
+  return { shop: shops[0], services, customer: users[0], amount, duration, serviceQuantities };
 }
 
 const jsonIds = (value) => {
@@ -422,6 +421,15 @@ const jsonIds = (value) => {
 };
 const money = (value) =>
   Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+function normalizeQuantities(raw, serviceIds) {
+  const values = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const quantities = Object.fromEntries(serviceIds.map((id) => [id, Number(values[id] ?? 1)]));
+  if (Object.values(quantities).some((qty) => !Number.isInteger(qty) || qty < 1 || qty > 20))
+    throw Object.assign(new Error("Service quantities must be whole numbers from 1 to 20."), { status: 400 });
+  if (Object.keys(values).some((id) => !serviceIds.includes(String(id))))
+    throw Object.assign(new Error("Service quantities do not match the selected services."), { status: 400 });
+  return quantities;
+}
 
 async function evaluateScheme(
   connection,
@@ -429,8 +437,10 @@ async function evaluateScheme(
     shopId,
     barberId,
     serviceIds,
+    serviceQuantities,
     services,
     customerId,
+    bookingDate,
     promoCode,
     schemeId,
     lock = false,
@@ -465,10 +475,10 @@ async function evaluateScheme(
   const serviceById = new Map(
     services.map((service) => [String(service.id), service]),
   );
-  const baseAmount = money(
-    services.reduce((sum, service) => sum + Number(service.price), 0),
-  );
+  const baseAmount = money(services.reduce((sum, service) => sum + Number(service.price) * serviceQuantities[String(service.id)], 0));
   let bestAutomatic = null;
+  let ineligibleBogoBarber = false;
+  const offerMessages = [];
   for (const offer of candidates) {
     const eligibleServiceIds = offer.all_services
       ? serviceIds
@@ -479,17 +489,29 @@ async function evaluateScheme(
           new Error("This offer does not apply to the selected services."),
           { status: 400 },
         );
+      if (offer.offer_type === "bogo") offerMessages.push(`${offer.title} was not applied: select the required purchased services shown in the offer details.`);
       continue;
     }
     if (
       !offer.all_barbers &&
       !jsonIds(offer.barber_ids_json).includes(String(barberId))
     ) {
+      if (offer.offer_type === "bogo") {
+        const requiredIds = jsonIds(offer.service_ids_json);
+        const requiredQuantities = typeof offer.required_service_quantities_json === "string"
+          ? JSON.parse(offer.required_service_quantities_json || "{}")
+          : offer.required_service_quantities_json || {};
+        const qualifies = requiredIds.length > 0 && requiredIds.every((id) =>
+          serviceById.has(id) && Number(serviceQuantities[id] || 0) >= Number(requiredQuantities[id] || 0),
+        );
+        if (qualifies) throw Object.assign(new Error("This BOGO offer is not available with the selected barber. Choose an eligible barber or change the selected services."), { status: 400 });
+      }
       if (code || schemeId)
         throw Object.assign(
           new Error("This offer does not apply to the selected barber."),
           { status: 400 },
         );
+      if (offer.offer_type === "bogo") offerMessages.push(`${offer.title} was not applied: it is not available with the selected barber.`);
       continue;
     }
     if (baseAmount < Number(offer.minimum_amount || 0)) {
@@ -500,6 +522,7 @@ async function evaluateScheme(
           ),
           { status: 400 },
         );
+      if (offer.offer_type === "bogo") offerMessages.push(`${offer.title} was not applied: the booking does not meet its minimum amount of ₹${Number(offer.minimum_amount).toFixed(2)}.`);
       continue;
     }
     const [useRows] = await connection.query(
@@ -519,14 +542,63 @@ async function evaluateScheme(
           new Error("This offer has reached its redemption limit."),
           { status: 409 },
         );
+      if (offer.offer_type === "bogo") offerMessages.push(`${offer.title} was not applied because its redemption limit has been reached.`);
       continue;
     }
-    const eligibleSubtotal = money(
-      eligibleServiceIds.reduce(
-        (sum, id) => sum + Number(serviceById.get(id).price),
-        0,
-      ),
-    );
+    const eligibleSubtotal = money(eligibleServiceIds.reduce((sum, id) => sum + Number(serviceById.get(id).price) * serviceQuantities[id], 0));
+    if (offer.offer_type === "bogo") {
+      const requiredIds = jsonIds(offer.service_ids_json);
+      const requiredQuantities = typeof offer.required_service_quantities_json === "string"
+        ? JSON.parse(offer.required_service_quantities_json || "{}")
+        : offer.required_service_quantities_json || {};
+      const allRequiredSelected = requiredIds.length > 0 && requiredIds.every((id) => serviceById.has(id));
+      if (!allRequiredSelected) {
+        if (code || schemeId) throw Object.assign(new Error("Select all required services for this offer."), { status: 400 });
+        offerMessages.push(`${offer.title} was not applied: select all of its required services and quantities.`);
+        continue;
+      }
+      const [rewardRows] = await connection.query(
+        "SELECT id,name,price,duration_minutes FROM services WHERE shop_id=? AND id=? AND enabled=1 LIMIT 1",
+        [shopId, offer.reward_service_id],
+      );
+      const rewardTarget = rewardRows[0];
+      const reward = rewardTarget ? calculateBogoReward(requiredIds.map((id) => serviceById.get(id)), serviceQuantities, requiredQuantities, Number(offer.free_quantity || 0), rewardTarget) : null;
+      if (!reward) {
+        if (code || schemeId) throw Object.assign(new Error("The required services, quantities, or reward service are no longer valid for this offer."), { status: 400 });
+        offerMessages.push(`${offer.title} was not applied because its required quantities or configured reward service are unavailable.`);
+        continue;
+      }
+      const freeServiceQuantities = { [reward.serviceId]: reward.quantity };
+      const discount = money(Number(rewardTarget.price) * reward.quantity);
+      const eligible = {
+        schemeId: offer.id, discountAmount: discount, originalAmount: money(baseAmount + discount),
+        discountedSubtotal: baseAmount, freeServiceQuantities,
+        duration: services.reduce((sum, service) => sum + Number(service.duration_minutes) * serviceQuantities[String(service.id)], 0) + Number(rewardTarget.duration_minutes) * reward.quantity,
+        promoCode: offer.promo_code || "",
+        scheme: { id: offer.id, title: offer.title, offerType: "bogo", requiredServices: requiredIds.map((id) => ({ id, name: serviceById.get(id).name, quantity: Number(requiredQuantities[id]) })), buyQuantity: Object.values(requiredQuantities).reduce((sum, qty) => sum + Number(qty), 0), freeQuantity: Number(offer.free_quantity), rewardServiceId: reward.serviceId, rewardServiceName: rewardTarget.name },
+      };
+      const [barberCanReward] = await connection.query(
+        `SELECT service_id FROM barber_services WHERE barber_id=? AND service_id IN (${[...requiredIds, reward.serviceId].map(() => "?").join(",")})`,
+        [barberId, ...requiredIds, reward.serviceId],
+      );
+      if (!barberCanFulfillBogo(barberCanReward.map((row) => row.service_id), requiredIds, reward.serviceId)) {
+        if (code || schemeId) throw Object.assign(new Error(`The selected barber cannot provide all required services for ${offer.title}, including its free ${rewardTarget.name} service. Choose another barber or change the selected services.`), { status: 400 });
+        ineligibleBogoBarber = true;
+        continue;
+      }
+      const [unavailableReward] = await connection.query(
+        "SELECT 1 FROM service_unavailability WHERE shop_id=? AND service_id=? AND unavailable_date=? LIMIT 1",
+        [shopId, reward.serviceId, bookingDate],
+      );
+      if (unavailableReward.length) {
+        if (code || schemeId) throw Object.assign(new Error("The free service in this offer is unavailable on the selected date."), { status: 409 });
+        offerMessages.push(`${offer.title} was not applied: ${rewardTarget.name} is unavailable on the selected booking date.`);
+        continue;
+      }
+      if (code || schemeId) return eligible;
+      if (!bestAutomatic || eligible.discountAmount > bestAutomatic.discountAmount) bestAutomatic = eligible;
+      continue;
+    }
     let discount =
       offer.discount_type === "percentage"
         ? money((eligibleSubtotal * Number(offer.discount_value)) / 100)
@@ -561,6 +633,7 @@ async function evaluateScheme(
       scheme: {
         id: offer.id,
         title: offer.title,
+        offerType: "discount",
         discountType: offer.discount_type,
         discountValue: Number(offer.discount_value),
       },
@@ -572,14 +645,17 @@ async function evaluateScheme(
     )
       bestAutomatic = eligible;
   }
-  if (bestAutomatic) return bestAutomatic;
+  if (bestAutomatic) return { ...bestAutomatic, offerMessages };
+  if (ineligibleBogoBarber) throw Object.assign(new Error("The selected barber cannot provide the free service for this BOGO offer. Choose an eligible barber or change the selected services."), { status: 400 });
   return {
     schemeId: null,
     discountAmount: 0,
     originalAmount: baseAmount,
     discountedSubtotal: baseAmount,
+    freeServiceQuantities: {},
     promoCode: "",
     scheme: null,
+    offerMessages,
   };
 }
 
@@ -715,6 +791,27 @@ async function validateScheduledSlot(
     );
 }
 
+async function validateQueueDuration(connection, shopId, barberId, bookingDate, duration) {
+  if (bookingDate !== localDateKey()) return;
+  const [active] = await connection.query(
+    `SELECT COUNT(*) AS total,COALESCE(SUM(duration_minutes),0) AS minutes
+     FROM payment_bookings WHERE shop_id=? AND barber_id=? AND status='accepted'
+       AND queue_status IN ('Waiting','Your Turn','In Service')`,
+    [shopId, barberId],
+  );
+  const [next] = await connection.query(
+    `SELECT scheduled_time FROM payment_bookings WHERE shop_id=? AND barber_id=? AND booking_date=?
+       AND scheduled_time IS NOT NULL AND status IN ('payment_submitted','accepted')
+       AND COALESCE(queue_status,'') NOT IN ('Cancelled','Completed','No Show')
+       AND scheduled_time > TIME(NOW()) ORDER BY scheduled_time LIMIT 1`,
+    [shopId, barberId, bookingDate],
+  );
+  if (!next.length) return;
+  const toMinutes = (value) => Number(String(value).slice(0, 2)) * 60 + Number(String(value).slice(3, 5));
+  if (Number(active[0]?.minutes || 0) + duration > toMinutes(next[0].scheduled_time) - toMinutes(localTimeKey()))
+    throw Object.assign(new Error("This booking duration would overlap the next scheduled appointment."), { status: 409 });
+}
+
 async function chooseAmount(connection, shopId, baseAmount) {
   const [rows] = await connection.query(
     `SELECT amount FROM payment_bookings
@@ -780,6 +877,7 @@ export async function paymentQuote(req, res) {
         ),
       ),
     ].sort();
+    const serviceQuantities = normalizeQuantities(req.body?.serviceQuantities, serviceIds);
     if (!shopId || !barberId || !serviceIds.length)
       return res.status(400).json({
         message: "Shop, barber and at least one service are required.",
@@ -787,7 +885,7 @@ export async function paymentQuote(req, res) {
 
     const { shop, services, customer, amount } = await validateSelection(
       connection,
-      { shopId, barberId, serviceIds, customerId, bookingDate, scheduledTime },
+      { shopId, barberId, serviceIds, serviceQuantities, customerId, bookingDate, scheduledTime },
     );
     const who = beneficiaryFrom(req.body, customer);
     if (who.error) return res.status(400).json({ message: who.error });
@@ -820,19 +918,22 @@ export async function paymentQuote(req, res) {
       barberId,
       serviceIds,
       services,
+      serviceQuantities,
       customerId,
+      bookingDate,
       promoCode: req.body?.promoCode,
     });
-    const finalAmount = await chooseAmount(
-      connection,
-      shopId,
-      applied.discountedSubtotal,
-    );
+    if (applied.duration) {
+      await validateScheduledSlot(connection, { shop, barberId, bookingDate, scheduledTime, duration: applied.duration });
+      if (!scheduledTime) await validateQueueDuration(connection, shopId, barberId, bookingDate, applied.duration);
+    }
+    const finalAmount = applied.scheme?.offerType === "bogo" ? applied.discountedSubtotal : await chooseAmount(connection, shopId, applied.discountedSubtotal);
     const quotePayload = {
       customerId,
       shopId,
       barberId,
       serviceIds,
+      serviceQuantities,
       bookingDate,
       scheduledTime,
       beneficiaryKey: who.key,
@@ -842,6 +943,7 @@ export async function paymentQuote(req, res) {
       schemeId: applied.schemeId,
       promoCode: applied.promoCode,
       discountedSubtotal: applied.discountedSubtotal,
+      freeServiceQuantities: applied.freeServiceQuantities || {},
       qrUrl: shop.upi_qr_url,
       exp: Date.now() + AMOUNT_WINDOW_MINUTES * 60 * 1000,
     };
@@ -849,7 +951,10 @@ export async function paymentQuote(req, res) {
       ...responsePayload({ id: null, amount: finalAmount }, shop, services),
       originalAmount: applied.originalAmount,
       discountAmount: applied.discountAmount,
+      freeServiceQuantities: applied.freeServiceQuantities || {},
+      paidAmount: applied.discountedSubtotal,
       scheme: applied.scheme,
+      offerMessages: applied.offerMessages || [],
       quoteToken: signQuote(quotePayload),
     });
   } catch (error) {
@@ -883,6 +988,7 @@ export async function submitPayment(req, res) {
         ),
       ),
     ].sort();
+    const serviceQuantities = normalizeQuantities(req.body?.serviceQuantities, serviceIds);
     if (!shopId || !barberId || !serviceIds.length)
       throw Object.assign(
         new Error("Shop, barber and at least one service are required."),
@@ -909,6 +1015,7 @@ export async function submitPayment(req, res) {
       shopId,
       barberId,
       serviceIds,
+      serviceQuantities,
       bookingDate,
       customerId,
       scheduledTime,
@@ -951,7 +1058,8 @@ export async function submitPayment(req, res) {
       quote.beneficiaryKey === who.key &&
       quote.qrUrl === shop.upi_qr_url &&
       JSON.stringify(quote.serviceIds) === JSON.stringify(serviceIds);
-    if (!selectionMatches)
+    const quantitiesMatch = JSON.stringify(quote?.serviceQuantities) === JSON.stringify(serviceQuantities);
+    if (!selectionMatches || !quantitiesMatch)
       throw Object.assign(
         new Error(
           "Payment amount could not be verified. Reopen the payment screen and try again.",
@@ -964,15 +1072,22 @@ export async function submitPayment(req, res) {
       barberId,
       serviceIds,
       services,
+      serviceQuantities,
       customerId,
+      bookingDate,
       promoCode: quote.promoCode,
       schemeId: quote.schemeId,
       lock: Boolean(quote.schemeId),
     });
+    if (applied.duration) {
+      await validateScheduledSlot(connection, { shop, barberId, bookingDate, scheduledTime, duration: applied.duration });
+      if (!scheduledTime) await validateQueueDuration(connection, shopId, barberId, bookingDate, applied.duration);
+    }
     if (
       money(applied.originalAmount) !== money(quote.originalAmount) ||
       money(applied.discountAmount) !== money(quote.discountAmount) ||
       money(applied.discountedSubtotal) !== money(quote.discountedSubtotal)
+      || JSON.stringify(applied.freeServiceQuantities || {}) !== JSON.stringify(quote.freeServiceQuantities || {})
     )
       throw Object.assign(
         new Error(
@@ -993,6 +1108,9 @@ export async function submitPayment(req, res) {
         shopId,
         barberId,
         serviceIds.join(","),
+        JSON.stringify(serviceQuantities),
+        applied.schemeId || "",
+        JSON.stringify(applied.freeServiceQuantities || {}),
         bookingDate,
         scheduledTime || "",
         scheduledTime,
@@ -1019,11 +1137,11 @@ export async function submitPayment(req, res) {
     await connection.query(
       `INSERT INTO payment_bookings
    (
-     id, shop_id, barber_id, customer_id, booking_date, scheduled_time, service_ids_json,
+     id, shop_id, barber_id, customer_id, booking_date, scheduled_time, service_ids_json, service_quantities_json, free_service_quantities_json,
      amount, original_amount, discount_amount, scheme_id, duration_minutes, beneficiary_json, beneficiary_key,
      request_hash, payment_method, status, payer_name, payment_submitted_at
    )
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
         bookingId,
         shopId,
@@ -1032,11 +1150,13 @@ export async function submitPayment(req, res) {
         bookingDate,
         scheduledTime,
         JSON.stringify(serviceIds),
+        JSON.stringify(serviceQuantities),
+        JSON.stringify(applied.freeServiceQuantities || {}),
         finalAmount,
         applied.originalAmount,
         applied.discountAmount,
         applied.schemeId,
-        duration,
+        applied.duration || duration,
         JSON.stringify(who.person),
         who.key,
         requestHash,
