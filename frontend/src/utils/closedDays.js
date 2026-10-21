@@ -325,6 +325,111 @@ export const scheduleError = (schedule) => {
   return "";
 };
 
+/**
+ * Given a shop, a booking date string (YYYY-MM-DD) and a chosen time (HH:MM),
+ * returns an object with:
+ *   - isInsideShift: boolean – true if the time falls within any shift on that day
+ *   - shifts: the shifts array for that day
+ *   - dayIsClosed: true if the day is marked closed
+ *   - closestBefore: { time: "HH:MM", label } – last valid close before chosen time (end of preceding shift)
+ *   - closestAfter:  { time: "HH:MM", label } – open of the next shift that starts after chosen time
+ *   - tomorrow: { date: "YYYY-MM-DD", time, label, dayName } – first shift open of next open day
+ *   - prevDay:  { date: "YYYY-MM-DD", time, label, dayName } – last open day before dateStr that is >= today
+ */
+export const getTimeSlotSuggestions = (shop, dateStr, chosenTime) => {
+  if (!shop || !dateStr || !chosenTime) return null;
+
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const jsDate = new Date(y, m - 1, d);
+  const weekday = JS_DAY[jsDate.getDay()];
+  const sched = scheduleOf(shop);
+  const dayObj = sched[weekday];
+
+  if (!dayObj || dayObj.closed) {
+    return { isInsideShift: false, dayIsClosed: true, shifts: [], closestBefore: null, closestAfter: null, tomorrow: _nextOpenDay(sched, dateStr), prevDay: _prevOpenDay(sched, dateStr) };
+  }
+
+  const shifts = normalizeDayShifts(dayObj).sort((a, b) => a.open.localeCompare(b.open));
+  const isInsideShift = shifts.some((s) => chosenTime >= s.open && chosenTime < s.close);
+
+  if (isInsideShift) return { isInsideShift: true, shifts, dayIsClosed: false, closestBefore: null, closestAfter: null, tomorrow: null, prevDay: null };
+
+  // Find the latest shift that closes before or at chosenTime
+  let closestBefore = null;
+  for (const s of shifts) {
+    if (s.close <= chosenTime) {
+      closestBefore = { time: s.close, label: _fmt(s.close) + " (end of shift)" };
+    }
+  }
+
+  // Find the earliest shift that opens after chosenTime
+  let closestAfter = null;
+  for (const s of shifts) {
+    if (s.open > chosenTime) {
+      closestAfter = { time: s.open, label: _fmt(s.open) + " (next shift)" };
+      break;
+    }
+  }
+
+  // If no "after" today (all shifts done), suggest first shift open
+  if (!closestAfter && shifts.length > 0) {
+    closestAfter = { time: shifts[0].open, label: _fmt(shifts[0].open) + " (first shift)" };
+  }
+
+  const tomorrow = _nextOpenDay(sched, dateStr);
+  const prevDay = _prevOpenDay(sched, dateStr);
+
+  return { isInsideShift: false, dayIsClosed: false, shifts, closestBefore, closestAfter, tomorrow, prevDay };
+};
+
+// Format HH:MM to human-readable 12h string
+const _fmt = (time) => {
+  if (!time) return "";
+  const [h, m] = time.split(":").map(Number);
+  const period = h < 12 ? "AM" : "PM";
+  const hour = h % 12 === 0 ? 12 : h % 12;
+  return `${hour}:${String(m).padStart(2, "0")} ${period}`;
+};
+
+// Get the first open shift of the next open day after dateStr
+const _nextOpenDay = (sched, dateStr) => {
+  if (!dateStr) return null;
+  const [y, m, d] = dateStr.split("-").map(Number);
+  for (let i = 1; i <= 7; i++) {
+    const next = new Date(y, m - 1, d + i);
+    const wd = JS_DAY[next.getDay()];
+    const day = sched[wd];
+    if (!day || day.closed) continue;
+    const shifts = normalizeDayShifts(day).sort((a, b) => a.open.localeCompare(b.open));
+    if (!shifts.length) continue;
+    const nextStr = toLocalDateString(next);
+    return { date: nextStr, time: shifts[0].open, label: _fmt(shifts[0].open), dayName: wd };
+  }
+  return null;
+};
+
+// Get the last open day BEFORE dateStr that is still >= today (not in the past)
+// Returns the last shift's open time so the customer can book a fresh slot that day.
+const _prevOpenDay = (sched, dateStr) => {
+  if (!dateStr) return null;
+  const today = toLocalDateString();
+  const [y, m, d] = dateStr.split("-").map(Number);
+  for (let i = 1; i <= 7; i++) {
+    const prev = new Date(y, m - 1, d - i);
+    const prevStr = toLocalDateString(prev);
+    // Don't suggest dates in the past
+    if (prevStr < today) return null;
+    const wd = JS_DAY[prev.getDay()];
+    const day = sched[wd];
+    if (!day || day.closed) continue;
+    const shifts = normalizeDayShifts(day).sort((a, b) => a.open.localeCompare(b.open));
+    if (!shifts.length) continue;
+    // Suggest the first shift of that day (earliest available slot)
+    return { date: prevStr, time: shifts[0].open, label: _fmt(shifts[0].open), dayName: wd };
+  }
+  return null;
+};
+
 export const todayHoursText = (shop, date = new Date()) => {
   const annual = annualScheduleForDate(shop, date);
   if (annual?.type === "closed") {

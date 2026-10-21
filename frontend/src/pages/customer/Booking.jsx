@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useOwner } from "../../hooks/useOwnerStore";
 import { api } from "../../services/api";
@@ -8,6 +8,9 @@ import {
   isShopOpenNow,
   getTemporaryClosure,
   formatDateDisplay,
+  getTimeSlotSuggestions,
+  scheduleOf,
+  normalizeDayShifts,
 } from "../../utils/closedDays";
 import { AlertTriangle } from "lucide-react";
 import {
@@ -377,23 +380,22 @@ export default function Booking() {
               Checking service availability...
             </p>
           )}
-          {bookingDate === bookingToday() && (
-            <label className="block max-w-xs">
-              <span className="label">Same-day appointment time (optional)</span>
-              <input
-                className="input mt-2"
-                type="time"
-                min={new Date(Date.now() + 60 * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
-                value={scheduledTime}
-                onChange={(e) => {
-                  setScheduledTime(e.target.value);
-                  setQuote(null);
-                  setPaymentError("");
-                }}
-              />
-              <span className="text-xs text-coffee/60">Leave blank to join the normal queue.</span>
-            </label>
-          )}
+          <SmartTimeSlotPicker
+            shop={shop}
+            bookingDate={bookingDate}
+            bookingToday={bookingToday}
+            scheduledTime={scheduledTime}
+            shopQueues={shop.queues || {}}
+            setScheduledTime={(t) => { setScheduledTime(t); setQuote(null); setPaymentError(""); }}
+            setBookingDate={(d) => {
+              setBookingDate(d);
+              setDateRestrictions([]);
+              setAvailabilityLoading(true);
+              setAvailabilityError("");
+              setQuote(null);
+              setPaymentError("");
+            }}
+          />
           {availabilityError && (
             <p className="text-sm text-rose" role="alert">
               {availabilityError}
@@ -768,3 +770,259 @@ const Row = ({ k, v }) => (
     <b className="text-right">{v}</b>
   </div>
 );
+
+// ---------------------------------------------------------------------------
+// SmartTimeSlotPicker
+// Lets the customer pick an appointment time, and if the chosen time is outside
+// the shop's shift hours it shows Before / After / Tomorrow suggestions.
+// ---------------------------------------------------------------------------
+const JS_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function fmt12(time) {
+  if (!time) return "";
+  const [h, m] = time.split(":").map(Number);
+  const period = h < 12 ? "AM" : "PM";
+  const hour = h % 12 === 0 ? 12 : h % 12;
+  return `${hour}:${String(m).padStart(2, "0")} ${period}`;
+}
+
+function SmartTimeSlotPicker({ shop, bookingDate, bookingToday, scheduledTime, shopQueues, setScheduledTime, setBookingDate }) {
+  const isToday = bookingDate === bookingToday();
+  const minTime = isToday
+    ? new Date(Date.now() + 60 * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+    : "00:00";
+
+  // Total active queue across ALL barbers at this shop
+  const totalActiveQueue = useMemo(() => {
+    if (!shopQueues) return 0;
+    const ACTIVE = ["Waiting", "Your Turn", "In Service"];
+    return Object.values(shopQueues).reduce(
+      (sum, entries) => sum + (Array.isArray(entries) ? entries.filter((e) => ACTIVE.includes(e.status)).length : 0),
+      0,
+    );
+  }, [shopQueues]);
+  const queueIsEmpty = totalActiveQueue === 0;
+
+  // ── Queue-clear time suggestion ──────────────────────────────────────────
+  // Find the EARLIEST time any barber becomes free (min ETA across all barbers).
+  // If that estimated free-slot falls within an open shift on the booking date,
+  // offer it as a "Today ~X PM · Queue clears" one-click button.
+  const queueClearSuggestion = useMemo(() => {
+    if (!shop || !shopQueues || !bookingDate) return null;
+    const services = shop.servicesList || [];
+
+    // Compute per-barber total ETA in minutes
+    const etaList = Object.values(shopQueues).map((entries) => {
+      const active = activeOf(entries || []);
+      if (!active.length) return 0;
+      return etaFor(services, entries, active.length);
+    }).filter((eta) => eta > 0);
+
+    // No one in queue – nothing to compute
+    if (!etaList.length) return null;
+
+    // Earliest a barber becomes free
+    const minEtaMinutes = Math.min(...etaList);
+
+    // Compute clock time: now + minEta
+    const nowIST = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const freeMinutesTotal = nowIST.getHours() * 60 + nowIST.getMinutes() + minEtaMinutes;
+    const freeH = Math.floor(freeMinutesTotal / 60) % 24;
+    const freeM = freeMinutesTotal % 60;
+    const freeTime = `${String(freeH).padStart(2, "0")}:${String(freeM).padStart(2, "0")}`;
+
+    // Only relevant when booking date is today
+    const today = bookingToday();
+    if (bookingDate !== today) return null;
+
+    // Check that freeTime falls within one of today's shifts on the booking date
+    const sched = scheduleOf(shop);
+    const [y, mo, d] = bookingDate.split("-").map(Number);
+    const jsDate = new Date(y, mo - 1, d);
+    const wd = JS_DAYS[jsDate.getDay()];
+    const dayObj = sched[wd];
+    if (!dayObj || dayObj.closed) return null;
+    const shifts = normalizeDayShifts(dayObj).sort((a, b) => a.open.localeCompare(b.open));
+    const withinShift = shifts.some((s) => freeTime >= s.open && freeTime < s.close);
+    if (!withinShift) return null;
+
+    return {
+      time: freeTime,
+      label: fmt12(freeTime),
+      etaMinutes: minEtaMinutes,
+    };
+  }, [shop, shopQueues, bookingDate]);
+
+  const suggestions = useMemo(
+    () => (scheduledTime ? getTimeSlotSuggestions(shop, bookingDate, scheduledTime) : null),
+    [shop, bookingDate, scheduledTime],
+  );
+
+  // Build today's shift display for context
+  const todayShifts = useMemo(() => {
+    if (!shop) return [];
+    const sched = scheduleOf(shop);
+    const [y, mo, d] = bookingDate.split("-").map(Number);
+    const jsDate = new Date(y, mo - 1, d);
+    const wd = JS_DAYS[jsDate.getDay()];
+    const dayObj = sched[wd];
+    if (!dayObj || dayObj.closed) return [];
+    return normalizeDayShifts(dayObj).sort((a, b) => a.open.localeCompare(b.open));
+  }, [shop, bookingDate]);
+
+  const isOutside = suggestions && !suggestions.isInsideShift && !suggestions.dayIsClosed;
+  const isDayClosed = suggestions?.dayIsClosed;
+
+  return (
+    <div className="space-y-3 max-w-sm">
+      <label className="block">
+        <span className="label">Appointment time (optional)</span>
+        <div className="flex gap-2 items-center mt-2">
+          <input
+            className={`input flex-1 ${
+              isOutside || isDayClosed ? "!border-rose" : scheduledTime ? "!border-olive" : ""
+            }`}
+            type="time"
+            min={minTime}
+            value={scheduledTime}
+            onChange={(e) => setScheduledTime(e.target.value)}
+          />
+          {scheduledTime && (
+            <button
+              type="button"
+              className="btn-ghost !py-2 !px-3 text-xs"
+              onClick={() => setScheduledTime("")}
+              title="Clear time"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+        {!scheduledTime && (
+          <span className="text-xs text-coffee/60">Leave blank to join the normal queue.</span>
+        )}
+        {scheduledTime && todayShifts.length > 0 && (
+          <span className="text-xs text-coffee/60">
+            Shop hours: {todayShifts.map((s) => `${fmt12(s.open)} – ${fmt12(s.close)}`).join(", ")}
+          </span>
+        )}
+      </label>
+
+      {/* ── Out-of-hours warning & suggestions ── */}
+      {scheduledTime && (isOutside || isDayClosed) && (
+        <div className="border border-amber-400/60 bg-amber-50/80 rounded-lg p-3 space-y-2.5">
+          <p className="text-sm font-semibold text-amber-800 flex items-center gap-1.5">
+            <span>⚠️</span>
+            {isDayClosed
+              ? `The shop is closed on this day.`
+              : `${fmt12(scheduledTime)} is outside the shop's open hours.`}
+          </p>
+
+          {todayShifts.length > 0 && (
+            <p className="text-xs text-amber-700">
+              Open shifts: {todayShifts.map((s) => `${fmt12(s.open)} – ${fmt12(s.close)}`).join(" · ")}
+            </p>
+          )}
+
+          <div className="flex flex-wrap gap-2 pt-1">
+            {/* Before – end of previous shift */}
+            {suggestions?.closestBefore && (
+              <button
+                type="button"
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-amber-400 bg-white text-amber-800 font-medium hover:bg-amber-100 transition-colors shadow-sm"
+                onClick={() => setScheduledTime(suggestions.closestBefore.time)}
+              >
+                <span>◀</span>
+                Before: {suggestions.closestBefore.label}
+              </button>
+            )}
+
+            {/* After – open of next shift today */}
+            {suggestions?.closestAfter && !isDayClosed && (
+              <button
+                type="button"
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-amber-400 bg-white text-amber-800 font-medium hover:bg-amber-100 transition-colors shadow-sm"
+                onClick={() => setScheduledTime(suggestions.closestAfter.time)}
+              >
+                <span>▶</span>
+                After: {suggestions.closestAfter.label}
+              </button>
+            )}
+
+            {/* Queue-clear time – come today when first barber is free */}
+            {queueClearSuggestion && (
+              <button
+                type="button"
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-olive/50 bg-olive/10 text-olive font-medium hover:bg-olive/20 transition-colors shadow-sm"
+                onClick={() => setScheduledTime(queueClearSuggestion.time)}
+              >
+                <span>🕐</span>
+                <span>Today ~{queueClearSuggestion.label} · Queue clears</span>
+                <span className="ml-1 px-1.5 py-0.5 rounded bg-olive/20 text-olive text-[10px] font-semibold">~{queueClearSuggestion.etaMinutes} min</span>
+              </button>
+            )}
+
+            {/* Previous open day – badge shows queue state + estimated free time */}
+            {suggestions?.prevDay && (
+              <button
+                type="button"
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-coffee/40 bg-white text-coffee font-medium hover:bg-khaki/40 transition-colors shadow-sm"
+                onClick={() => {
+                  setBookingDate(suggestions.prevDay.date);
+                  setScheduledTime(suggestions.prevDay.time);
+                }}
+              >
+                <span>⬅️</span>
+                <span>Earlier ({suggestions.prevDay.dayName}): {suggestions.prevDay.label}</span>
+                {queueIsEmpty ? (
+                  <span className="ml-1 px-1.5 py-0.5 rounded bg-olive/20 text-olive text-[10px] font-semibold">Queue empty</span>
+                ) : queueClearSuggestion ? (
+                  <span className="ml-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-semibold">~{queueClearSuggestion.label} free today</span>
+                ) : (
+                  <span className="ml-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-semibold">{totalActiveQueue} in queue</span>
+                )}
+              </button>
+            )}
+
+            {/* Tomorrow – fresh day, queue always resets; show today's clear time if busy */}
+            {suggestions?.tomorrow && (
+              <button
+                type="button"
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-coffee/40 bg-white text-coffee font-medium hover:bg-khaki/40 transition-colors shadow-sm"
+                onClick={() => {
+                  setBookingDate(suggestions.tomorrow.date);
+                  setScheduledTime(suggestions.tomorrow.time);
+                }}
+              >
+                <span>📅</span>
+                <span>Tomorrow ({suggestions.tomorrow.dayName}): {suggestions.tomorrow.label}</span>
+                {/* Tomorrow always starts fresh — but hint when queue clears today */}
+                {!queueIsEmpty && queueClearSuggestion ? (
+                  <>
+                    <span className="ml-1 px-1.5 py-0.5 rounded bg-olive/20 text-olive text-[10px] font-semibold">Fresh start</span>
+                    <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-semibold">or today ~{queueClearSuggestion.label}</span>
+                  </>
+                ) : !queueIsEmpty ? (
+                  <>
+                    <span className="ml-1 px-1.5 py-0.5 rounded bg-olive/20 text-olive text-[10px] font-semibold">Fresh start</span>
+                    <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-semibold">{totalActiveQueue} in queue now</span>
+                  </>
+                ) : (
+                  <span className="ml-1 px-1.5 py-0.5 rounded bg-olive/20 text-olive text-[10px] font-semibold">Fresh start</span>
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Inside shift confirmation ── */}
+      {scheduledTime && suggestions?.isInsideShift && (
+        <div className="flex items-center gap-2 text-xs text-olive font-medium">
+          <span>✅</span>
+          <span>{fmt12(scheduledTime)} is within shop hours.</span>
+        </div>
+      )}
+    </div>
+  );
+}
