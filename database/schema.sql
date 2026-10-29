@@ -178,6 +178,8 @@ CREATE TABLE IF NOT EXISTS schemes (
   free_quantity INT UNSIGNED NULL,
   required_service_quantities_json JSON NULL,
   reward_service_id CHAR(36) NULL,
+  reward_service_ids_json JSON NULL,
+  max_reward_count INT UNSIGNED NULL,
   discount_type ENUM('percentage','fixed') NOT NULL,
   discount_value DECIMAL(10,2) NOT NULL,
   starts_at DATETIME NULL,
@@ -191,6 +193,10 @@ CREATE TABLE IF NOT EXISTS schemes (
   usage_limit INT UNSIGNED NULL,
   per_customer_limit INT UNSIGNED NULL,
   promo_code VARCHAR(32) NULL,
+  new_customer_only TINYINT(1) NOT NULL DEFAULT 0,
+  happy_hour_start_time TIME NULL,
+  happy_hour_end_time TIME NULL,
+  happy_hour_days_json JSON NULL,
   status ENUM('draft','active','paused') NOT NULL DEFAULT 'draft',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -505,6 +511,22 @@ PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 SET @c := (SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND INDEX_NAME='idx_booking_scheme_status');
 SET @ddl := IF(@c=0, 'CREATE INDEX idx_booking_scheme_status ON payment_bookings (scheme_id,status)', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='schemes' AND COLUMN_NAME='new_customer_only');
+SET @ddl := IF(@c=0, 'ALTER TABLE schemes ADD COLUMN new_customer_only TINYINT(1) NOT NULL DEFAULT 0 AFTER promo_code', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='schemes' AND COLUMN_NAME='happy_hour_start_time');
+SET @ddl := IF(@c=0, 'ALTER TABLE schemes ADD COLUMN happy_hour_start_time TIME NULL AFTER new_customer_only', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='schemes' AND COLUMN_NAME='happy_hour_end_time');
+SET @ddl := IF(@c=0, 'ALTER TABLE schemes ADD COLUMN happy_hour_end_time TIME NULL AFTER happy_hour_start_time', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='schemes' AND COLUMN_NAME='happy_hour_days_json');
+SET @ddl := IF(@c=0, 'ALTER TABLE schemes ADD COLUMN happy_hour_days_json JSON NULL AFTER happy_hour_end_time', 'SELECT 1');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- ---- complaints (add_complaint_details_and_resolution, add_complaint_target_routing)

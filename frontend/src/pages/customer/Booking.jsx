@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useOwner } from "../../hooks/useOwnerStore";
 import { api } from "../../services/api";
 import { Badge, Rating } from "../../components/common/ui";
+import SearchableServiceSelector from "../../components/common/SearchableServiceSelector";
 import { activeOf, etaFor } from "../../utils/ownerEta";
 import {
   isShopOpenNow,
@@ -12,7 +13,7 @@ import {
   scheduleOf,
   normalizeDayShifts,
 } from "../../utils/closedDays";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 import {
   isValidEmail,
   isValidPhone,
@@ -29,6 +30,12 @@ const bookingToday = () => {
   }).formatToParts(new Date());
   return `${parts.find((part) => part.type === "year").value}-${parts.find((part) => part.type === "month").value}-${parts.find((part) => part.type === "day").value}`;
 };
+const formatOfferTime = (value) => {
+  if (!value) return "";
+  const [hour, minute] = String(value).slice(0, 5).split(":").map(Number);
+  return `${hour % 12 || 12}${minute ? `:${String(minute).padStart(2, "0")}` : ""} ${hour >= 12 ? "PM" : "AM"}`;
+};
+const WEEKDAY_NAMES = { Mon: "Monday", Tue: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Fri: "Friday", Sat: "Saturday", Sun: "Sunday" };
 
 
 export default function Booking() {
@@ -42,12 +49,15 @@ export default function Booking() {
   const [step, setStep] = useState(0);
   const [sids, setSids] = useState([]);
   const [serviceQuantities, setServiceQuantities] = useState({});
+  const [selectedBogoOfferId, setSelectedBogoOfferId] = useState("");
+  const [rewardServiceQuantities, setRewardServiceQuantities] = useState({});
   const [bid, setBid] = useState(null);
   const [agree, setAgree] = useState(false);
   const [forWhom, setForWhom] = useState("self");
   const [friend, setFriend] = useState({ name: "", mobile: "", email: "" });
 
   const [quote, setQuote] = useState(null);
+  const quoteRequestId = useRef(0);
   const [quoteBusy, setQuoteBusy] = useState(false);
   const [promoCode, setPromoCode] = useState("");
   const [appliedPromoCode, setAppliedPromoCode] = useState("");
@@ -79,21 +89,38 @@ export default function Booking() {
   const total = selected.reduce((n, s) => n + Number(s.price || 0) * Number(serviceQuantities[s.id] || 1), 0);
   const duration = selected.reduce((n, s) => n + Number(s.duration || 0) * Number(serviceQuantities[s.id] || 1), 0);
   const applicableBogoOffers = publicOffers.filter((offer) => {
+    if (offer.newCustomerOnly && offer.customerEligible === false) return false;
     const requiredIds = (offer.serviceIds || []).map(String);
-    return offer.offerType === "bogo" && !offer.promoCode && requiredIds.length > 0 &&
+    const rewardIds = (offer.rewardServiceIds?.length ? offer.rewardServiceIds : offer.rewardServiceId ? [offer.rewardServiceId] : []).map(String);
+    const hasAvailableReward = rewardIds.some((rewardId) => shop?.servicesList?.some((service) => String(service.id) === rewardId && service.enabled !== false));
+    return offer.offerType === "bogo" && requiredIds.length > 0 &&
+      hasAvailableReward &&
       total >= Number(offer.minimumAmount || 0) &&
       requiredIds.every((sid) => sids.includes(sid) && Number(serviceQuantities[sid] || 1) >= Number(offer.requiredQuantities?.[sid] || 1));
-  });
+  }).filter((offer) => !offer.promoCode
+    ? !appliedPromoCode
+    : String(offer.promoCode).toUpperCase() === appliedPromoCode);
+  const activeBogoOffer = applicableBogoOffers.find((offer) => String(offer.id) === String(selectedBogoOfferId)) || applicableBogoOffers[0] || null;
+  const activeRewardIds = (activeBogoOffer?.rewardServiceIds?.length
+    ? activeBogoOffer.rewardServiceIds.map(String)
+    : activeBogoOffer?.rewardServiceId ? [String(activeBogoOffer.rewardServiceId)] : [])
+    .filter((rewardId) => shop?.servicesList?.some((service) => String(service.id) === rewardId && service.enabled !== false));
+  const selectedRewards = activeBogoOffer?.rewardSelectionEnabled
+    ? Object.fromEntries(Object.entries(rewardServiceQuantities).filter(([sid]) => activeRewardIds.includes(sid)))
+    : {};
+  const selectedRewardCount = Object.values(selectedRewards).reduce((sum, quantity) => sum + Number(quantity || 0), 0);
+  const rewardLimit = Number(activeBogoOffer?.maxRewardCount || activeBogoOffer?.freeQuantity || 1);
   const serviceEligibleBarbers = (shop?.barbersList || []).filter(
     (b) => !sids.length || sids.every((sid) => (b.services || []).map(String).includes(sid)),
   );
   const shopBarbers = serviceEligibleBarbers.filter((barber) =>
-    !applicableBogoOffers.length || applicableBogoOffers.some((offer) =>
-      (offer.allBarbers || (offer.barberIds || []).map(String).includes(String(barber.id))) &&
-      (barber.services || []).map(String).includes(String(offer.rewardServiceId)),
-    ),
+    !activeBogoOffer ||
+      ((activeBogoOffer.allBarbers || (activeBogoOffer.barberIds || []).map(String).includes(String(barber.id))) &&
+      (activeBogoOffer.rewardSelectionEnabled
+        ? (Object.keys(selectedRewards).length ? Object.keys(selectedRewards).every((sid) => (barber.services || []).map(String).includes(sid)) : activeRewardIds.some((sid) => (barber.services || []).map(String).includes(sid)))
+        : activeRewardIds.every((sid) => (barber.services || []).map(String).includes(sid)))),
   );
-  const solo = shopBarbers.length === 1 && applicableBogoOffers.length === 0;
+  const solo = shopBarbers.length === 1 && !activeBogoOffer;
   const barber = shopBarbers.find(
     (b) => b.id === (solo ? shopBarbers[0]?.id : bid),
   );
@@ -116,8 +143,9 @@ export default function Booking() {
         };
 
   const loadQuote = async (code = appliedPromoCode) => {
-    if (!shop || !barber || !sids.length || blockedSelection || quoteBusy)
+    if (!shop || !barber || !sids.length || blockedSelection)
       return;
+    const requestId = ++quoteRequestId.current;
     setQuoteBusy(true);
     setPaymentError("");
     try {
@@ -128,12 +156,15 @@ export default function Booking() {
         barberId: barber.id,
         bookingDate,
         scheduledTime: bookingDate === bookingToday() ? scheduledTime : "",
-        promoCode: code,
+        promoCode: activeBogoOffer?.rewardSelectionEnabled && selectedRewardCount === 0 ? "" : code,
+        bogoOfferId: activeBogoOffer?.rewardSelectionEnabled && selectedRewardCount > 0 ? activeBogoOffer.id : undefined,
+        rewardServiceQuantities: selectedRewards,
         beneficiary: beneficiaryBody(),
       });
-      setQuote(data);
+      if (requestId === quoteRequestId.current) setQuote(data);
     } catch (error) {
       const data = error.response?.data;
+      if (requestId !== quoteRequestId.current) return;
       if (error.response?.status === 409 && data?.bookingId) {
         nav(`/app/queue/payment/${data.bookingId}`);
         return;
@@ -143,7 +174,7 @@ export default function Booking() {
         data?.message || "This shop cannot prepare the payment right now.",
       );
     } finally {
-      setQuoteBusy(false);
+      if (requestId === quoteRequestId.current) setQuoteBusy(false);
     }
   };
 
@@ -192,6 +223,8 @@ export default function Booking() {
     barber?.id,
     sids.join(","),
     JSON.stringify(serviceQuantities),
+    activeBogoOffer?.id,
+    JSON.stringify(selectedRewards),
     forWhom,
     friend.name,
     friend.mobile,
@@ -205,10 +238,26 @@ export default function Booking() {
   const toggleService = (sid) => {
     setQuote(null);
     setPaymentError("");
+    setRewardServiceQuantities({});
+    setSelectedBogoOfferId("");
     setSids((prev) =>
       prev.includes(sid) ? prev.filter((x) => x !== sid) : [...prev, sid],
     );
     setBid(null);
+  };
+
+  const changeRewardSelection = (serviceId, selected) => {
+    setQuote(null);
+    setRewardServiceQuantities((current) => {
+      const next = { ...current };
+      const currentCount = Object.keys(current).length;
+      if (!selected) delete next[serviceId];
+      else {
+        if (currentCount >= rewardLimit || current[serviceId]) return current;
+        next[serviceId] = 1;
+      }
+      return next;
+    });
   };
 
   const next = () => setStep(step === 0 && solo ? 2 : step + 1);
@@ -273,6 +322,7 @@ export default function Booking() {
     agree,
   ][step];
 
+  const bogoRewardSelector = applicableBogoOffers.length > 0 && <section className="border border-khaki p-4 space-y-3"><p className="label">Choose BOGO rewards</p>{applicableBogoOffers.length > 1 && <div className="space-y-2">{applicableBogoOffers.map((offer) => <label key={offer.id} className="flex gap-2 text-sm"><input type="radio" name="booking-bogo-offer" checked={String(activeBogoOffer?.id) === String(offer.id)} onChange={() => { setSelectedBogoOfferId(String(offer.id)); setRewardServiceQuantities({}); setQuote(null); }} />{offer.title}</label>)}</div>}{activeBogoOffer?.rewardSelectionEnabled ? <><p className="text-sm">Select up to {rewardLimit} different reward services. Each selected service is free once.</p><SearchableServiceSelector services={shop.servicesList.filter((service) => activeRewardIds.includes(String(service.id)))} selectedIds={Object.keys(selectedRewards)} label="Search free reward services" onSelect={(service) => changeRewardSelection(String(service.id), true)} onRemove={(service) => changeRewardSelection(String(service.id), false)} disabled={(service) => dateRestrictions.some((restriction) => String(restriction.serviceId) === String(service.id)) || selectedRewardCount >= rewardLimit} selectedContent={(service) => <><b>{service.name}</b> · ₹{Number(service.price).toFixed(2)} <b className="text-olive">FREE</b></>} /><p className="text-xs text-soft">Selected {selectedRewardCount} of {rewardLimit} allowed.</p></> : <p className="text-sm">This existing BOGO offer applies its configured reward automatically.</p>}</section>;
   if (!shop) return <div className="fade">Shop is no longer available.</div>;
 
   const closure = getTemporaryClosure(shop);
@@ -374,7 +424,7 @@ export default function Booking() {
               }}
             />
           </label>
-          {publicOffers.length > 0 && <section className="border border-khaki p-4 space-y-2"><p className="label">Available offers</p>{publicOffers.map((offer) => <div key={offer.id} className="text-sm"><b>{offer.title}</b>{offer.offerType === "bogo" ? <p>Buy {offer.serviceIds.map((serviceId) => `${offer.requiredQuantities?.[serviceId] || 1} × ${shop.servicesList.find((service) => String(service.id) === String(serviceId))?.name || "service"}`).join(" + ")} · Get {offer.freeQuantity} × {shop.servicesList.find((service) => String(service.id) === String(offer.rewardServiceId))?.name || "reward service"} free.</p> : <p>{offer.discountType === "percentage" ? `${offer.discountValue}% off` : `₹${Number(offer.discountValue).toFixed(2)} off`} {offer.promoCode ? `· Code ${offer.promoCode}` : "· Automatically applied when eligible"}</p>}</div>)}</section>}
+          {publicOffers.length > 0 && <section className="border border-khaki p-4 space-y-2"><p className="label">Available offers</p>{publicOffers.map((offer) => { const rewardIds = offer.rewardServiceIds?.length ? offer.rewardServiceIds : offer.rewardServiceId ? [offer.rewardServiceId] : []; const dayNames = (offer.happyHourDays || []).map((day) => WEEKDAY_NAMES[day]).filter(Boolean); return <div key={offer.id} className={`text-sm ${offer.newCustomerOnly && offer.customerEligible === false ? "opacity-60" : ""}`} aria-disabled={offer.newCustomerOnly && offer.customerEligible === false}><b>{offer.title}</b>{offer.offerType === "bogo" ? <p>Buy {offer.serviceIds.map((serviceId) => `${offer.requiredQuantities?.[serviceId] || 1} × ${shop.servicesList.find((service) => String(service.id) === String(serviceId))?.name || "service"}`).join(" + ")} · {offer.rewardSelectionEnabled ? `Choose up to ${offer.maxRewardCount || 1} free reward(s): ${rewardIds.map((rewardId) => shop.servicesList.find((service) => String(service.id) === String(rewardId))?.name || "reward service").join(", ")}` : `Get ${offer.freeQuantity} × ${shop.servicesList.find((service) => String(service.id) === String(offer.rewardServiceId))?.name || "reward service"} free`}</p> : <p>{offer.discountType === "percentage" ? `${offer.discountValue}% off` : `₹${Number(offer.discountValue).toFixed(2)} off`} {offer.promoCode ? `· Code ${offer.promoCode}` : "· Automatically applied when eligible"}</p>}{offer.happyHourEnabled && <p className="text-brass">Happy Hour · {offer.offerType === "bogo" ? "BOGO reward" : offer.discountType === "percentage" ? `${offer.discountValue}% off` : `₹${Number(offer.discountValue).toFixed(2)} off`} available {formatOfferTime(offer.happyHourStartTime)}–{formatOfferTime(offer.happyHourEndTime)}{dayNames.length ? ` on ${dayNames.join(", ")}` : " every day"} (shop local time; end time excluded).</p>}{offer.newCustomerOnly && <p className={offer.customerEligible ? "text-olive" : "text-soft"}>{offer.customerEligible ? "New-customer offer · You’re eligible before your first completed booking." : offer.eligibilityMessage || "New-customer offer is not currently available."}</p>}</div>; })}</section>}
           {availabilityLoading && (
             <p className="text-sm text-coffee/70">
               Checking service availability...
@@ -401,58 +451,16 @@ export default function Booking() {
               {availabilityError}
             </p>
           )}
-          <div className="border-t border-khaki">
-            {shop.servicesList
-              .filter((s) => s.enabled !== false)
-              .map((s) => {
-                const restriction = unavailableByService.get(s.id);
-                const isSelected = sids.includes(s.id);
-                return (
-                  <button
-                    key={s.id}
-                    onClick={() => toggleService(s.id)}
-                    disabled={!!restriction && !isSelected}
-                    className={`w-full flex justify-between items-center py-4 px-3 border-b border-khaki text-left disabled:opacity-70 ${isSelected ? "bg-olive/15" : ""}`}
-                  >
-                    <span className="flex gap-3 items-start">
-                      <span
-                        className={`mt-1 w-4 h-4 border grid place-items-center text-xs ${sids.includes(s.id) ? "bg-olive text-[#1C1713] border-coffee" : "border-coffee/40"}`}
-                      >
-                        {sids.includes(s.id) ? "✓" : ""}
-                      </span>
-                      <span>
-                        <b>{s.name}</b>
-                        <br />
-                        <span className="text-sm text-coffee/70">
-                          {s.duration} min
-                        </span>
-                        {restriction && (
-                          <span className="block text-sm text-rose mt-1">
-                            {s.name} is unavailable on{" "}
-                            {formatDateDisplay(bookingDate, true)}.
-                            {restriction.reason
-                              ? ` Reason: ${restriction.reason}`
-                              : ""}
-                          </span>
-                        )}
-                      </span>
-                    </span>
-                    <span>₹{s.price}</span>
-                  </button>
-                );
-              })}
-          </div>
+          <SearchableServiceSelector services={shop.servicesList} selectedIds={sids} label="Paid services" placeholder="Search or select a service..." noMatchesText="No matching services found." showSelected={false} onSelect={(service) => toggleService(service.id)} disabled={(service) => unavailableByService.has(service.id)} suggestionContent={(service) => <>{service.name}{unavailableByService.has(service.id) && <span className="block text-rose">Unavailable on {formatDateDisplay(bookingDate, true)}{unavailableByService.get(service.id)?.reason ? `: ${unavailableByService.get(service.id).reason}` : ""}</span>}</>} />
 
           {selected.length > 0 && (
             <div className="border border-khaki p-4">
               <p className="label">Selected services</p>
               <div className="space-y-1 mt-2">
                 {selected.map((s) => (
-                  <div key={s.id} className="flex justify-between text-sm">
-                    <span>{s.name}</span>
-                    <span>
-                      ₹{s.price} · {s.duration} min
-                    </span>
+                  <div key={s.id} className="flex justify-between items-center gap-3 text-sm border-b last:border-0 border-khaki py-2">
+                    <span><b>{s.name}</b><span className="block text-xs text-soft">₹{s.price} · {s.duration} min</span></span>
+                    <button type="button" className="btn-ghost !px-2 !py-1" aria-label={`Remove ${s.name}`} onClick={() => toggleService(s.id)}><X size={15} /></button>
                   </div>
                 ))}
               </div>
@@ -506,6 +514,7 @@ export default function Booking() {
               );
             })
           )}
+          {bogoRewardSelector}
         </div>
       )}
 
@@ -522,6 +531,7 @@ export default function Booking() {
             k="Services"
             v={selected.map((s) => `${s.name} · ${s.duration} min`).join(", ")}
           />
+          {activeBogoOffer?.rewardSelectionEnabled && selectedRewardCount > 0 && <Row k="Free rewards" v={Object.entries(selectedRewards).map(([serviceId, quantity]) => `${shop.servicesList.find((service) => String(service.id) === serviceId)?.name || "Service"} × ${quantity} · FREE`).join(", ")} />}
           <Row k="Barber" v={barber.name} />
           <Row k="Booking date" v={formatDateDisplay(bookingDate, true)} />
           <Row
@@ -646,8 +656,9 @@ export default function Booking() {
         <div className="border border-khaki bg-card p-6 md:p-8">
           <div className="border border-khaki p-4 mb-5 space-y-2">
             <label className="block"><span className="label">Promo code (optional)</span><input className="input mt-1 uppercase" maxLength={32} value={promoCode} onChange={(e) => setPromoCode(e.target.value.toUpperCase())} placeholder="Enter offer code" /></label>
-            <div className="flex flex-wrap items-center gap-3"><button type="button" className="btn-ghost" disabled={quoteBusy} onClick={() => { const code = promoCode.trim().toUpperCase(); setAppliedPromoCode(code); setQuote(null); if (code === appliedPromoCode) loadQuote(code); }}>Apply code</button><p className="text-xs text-soft">Eligible offers without a promo code are checked automatically.</p></div>
-            {quote?.scheme && <p className="text-sm text-olive" role="status">{quote.scheme.offerType === "bogo" ? `${quote.scheme.title}: Buy ${quote.scheme.requiredServices.map((item) => `${item.quantity} × ${item.name}`).join(" + ")} · Get ${quote.scheme.freeQuantity} × ${quote.scheme.rewardServiceName} free.` : `${quote.scheme.title} is confirmed for this booking.`}</p>}
+            <div className="flex flex-wrap items-center gap-3"><button type="button" className="btn-ghost" disabled={quoteBusy} onClick={() => { const code = promoCode.trim().toUpperCase(); setAppliedPromoCode(code); setSelectedBogoOfferId(""); setRewardServiceQuantities({}); setQuote(null); if (code === appliedPromoCode) loadQuote(code); }}>Apply code</button><p className="text-xs text-soft">Eligible offers without a promo code are checked automatically.</p></div>
+            {activeBogoOffer?.rewardSelectionEnabled && appliedPromoCode && selectedRewardCount === 0 && <p className="text-sm text-amber-800" role="status">Go back to the Barber step to choose free rewards for this BOGO code, then continue to payment.</p>}
+            {quote?.scheme && <p className="text-sm text-olive" role="status">{quote.scheme.offerType === "bogo" ? `${quote.scheme.title}: Buy ${quote.scheme.requiredServices.map((item) => `${item.quantity} × ${item.name}`).join(" + ")} · Free rewards: ${(quote.scheme.rewardServices || []).map((item) => `${item.quantity} × ${item.name}`).join(", ")}.` : `${quote.scheme.title} is confirmed for this booking.`}</p>}
             {(quote?.offerMessages || []).map((message, index) => <p key={`offer-message-${index}`} className="text-sm text-amber-800" role="status">{message}</p>)}
           </div>
           {quoteBusy ? (
@@ -666,7 +677,17 @@ export default function Booking() {
             </div>
           ) : quote ? (
             <div className="space-y-6">
-              {quote.scheme?.offerType === "bogo" && <div className="border border-khaki p-4 space-y-1 text-sm"><p className="label">BOGO booking items</p>{selected.map((service) => <div key={service.id} className="flex justify-between"><span>{service.name} × {serviceQuantities[service.id] || 1}</span><span>₹{(Number(service.price) * Number(serviceQuantities[service.id] || 1)).toFixed(2)}</span></div>)}{Object.entries(quote.freeServiceQuantities || {}).map(([serviceId, quantity]) => { const service = shop.servicesList.find((item) => String(item.id) === serviceId); return service && <div key={`free-${serviceId}`} className="flex justify-between text-olive"><span>{service.name} × {quantity} · FREE</span><span>₹0.00</span></div>; })}</div>}
+              <div className="border border-khaki p-4 space-y-1 text-sm" aria-label="Read-only booking summary">
+                <p className="label">Booking summary</p>
+                {selected.map((service) => {
+                  const quantity = Number(serviceQuantities[service.id] || 1);
+                  return <div key={service.id} className="flex justify-between gap-3"><span>{service.name} × {quantity}</span><span>₹{(Number(service.price) * quantity).toFixed(2)}</span></div>;
+                })}
+                {Object.entries(quote.freeServiceQuantities || {}).map(([serviceId, quantity]) => {
+                  const service = shop.servicesList.find((item) => String(item.id) === serviceId);
+                  return service && <div key={`free-${serviceId}`} className="flex justify-between gap-3 text-olive"><span>{service.name} × {quantity} · FREE</span><span>₹0.00</span></div>;
+                })}
+              </div>
               {Number(quote.discountAmount) > 0 && <div className="border border-olive/30 bg-olive/10 p-4 space-y-1 text-sm"><div className="flex justify-between"><span>Original price</span><span>₹{Number(quote.originalAmount).toFixed(2)}</span></div><div className="flex justify-between"><span>{quote.scheme?.title || "Offer discount"}</span><span>−₹{Number(quote.discountAmount).toFixed(2)}</span></div>{Number(quote.amount) > Number(quote.originalAmount) - Number(quote.discountAmount) && <div className="flex justify-between"><span>UPI payment reference adjustment</span><span>+₹{(Number(quote.amount) - Number(quote.originalAmount) + Number(quote.discountAmount)).toFixed(2)}</span></div>}<div className="flex justify-between border-t border-olive/20 pt-2 font-medium"><span>Final payable amount</span><span>₹{Number(quote.amount).toFixed(2)}</span></div></div>}
               <div>
                 <p className="label">UPI payment</p>

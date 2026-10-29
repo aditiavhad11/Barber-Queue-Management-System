@@ -48,6 +48,8 @@ export async function ensureSchema() {
     free_quantity INT UNSIGNED NULL,
     required_service_quantities_json JSON NULL,
     reward_service_id CHAR(36) NULL,
+    reward_service_ids_json JSON NULL,
+    max_reward_count INT UNSIGNED NULL,
     discount_type ENUM('percentage','fixed') NOT NULL,
     discount_value DECIMAL(10,2) NOT NULL,
     starts_at DATETIME NULL,
@@ -61,6 +63,10 @@ export async function ensureSchema() {
     usage_limit INT UNSIGNED NULL,
     per_customer_limit INT UNSIGNED NULL,
     promo_code VARCHAR(32) NULL,
+    new_customer_only TINYINT(1) NOT NULL DEFAULT 0,
+    happy_hour_start_time TIME NULL,
+    happy_hour_end_time TIME NULL,
+    happy_hour_days_json JSON NULL,
     status ENUM('draft','active','paused') NOT NULL DEFAULT 'draft',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -74,6 +80,12 @@ export async function ensureSchema() {
   await ensureColumn("schemes", "free_quantity", "INT UNSIGNED NULL");
   await ensureColumn("schemes", "required_service_quantities_json", "JSON NULL");
   await ensureColumn("schemes", "reward_service_id", "CHAR(36) NULL");
+  await ensureColumn("schemes", "reward_service_ids_json", "JSON NULL");
+  await ensureColumn("schemes", "max_reward_count", "INT UNSIGNED NULL");
+  await ensureColumn("schemes", "new_customer_only", "TINYINT(1) NOT NULL DEFAULT 0");
+  await ensureColumn("schemes", "happy_hour_start_time", "TIME NULL");
+  await ensureColumn("schemes", "happy_hour_end_time", "TIME NULL");
+  await ensureColumn("schemes", "happy_hour_days_json", "JSON NULL");
   await ensureColumn("payment_bookings", "service_quantities_json", "JSON NULL");
   await ensureColumn("payment_bookings", "free_service_quantities_json", "JSON NULL");
   await ensureColumn("payment_bookings", "discount_amount", "DECIMAL(10,2) NOT NULL DEFAULT 0");
