@@ -10,6 +10,7 @@ import {
   recalculateScheduledBookings,
   requestScheduledQueueRecalculation,
 } from "../services/scheduledQueueService.js";
+import { acceptBookingCore } from "../services/bookingAcceptService.js";
 import { jsonArray } from "../utils/json.js";
 import { money } from "../utils/money.js";
 import {
@@ -724,151 +725,36 @@ export async function acceptBooking(req, res) {
   }
 
   const connection = await pool.getConnection();
+  let result;
   try {
     await connection.beginTransaction();
-    const [barberRows] = await connection.query(
-      "SELECT id,queue_limit FROM barbers WHERE id=? AND shop_id=? FOR UPDATE",
-      [booking.barberId, booking.shopId],
-    );
-    const limit = Number(barberRows[0]?.queue_limit || 0);
-    if (!limit)
-      throw AppError.conflict(
-        "This barber has no valid queue capacity configured.",
-        "QUEUE_CAPACITY_NOT_CONFIGURED",
-      );
-    const [activeRows] = await connection.query(
-      `SELECT COUNT(*) AS total FROM payment_bookings
-       WHERE shop_id=? AND barber_id=? AND status='accepted'
-         AND queue_status IN ('Waiting','Your Turn','In Service','Scheduled')`,
-      [booking.shopId, booking.barberId],
-    );
-    if (Number(activeRows[0].total) >= limit) {
-      const [waitRows] = await connection.query(
-        `SELECT COALESCE(SUM(duration_minutes),0) AS minutes FROM payment_bookings
-         WHERE shop_id=? AND barber_id=? AND status='accepted'
-           AND queue_status IN ('Waiting','Your Turn','In Service')`,
-        [booking.shopId, booking.barberId],
-      );
-      throw AppError.conflict(
-        `Cannot take in queue till for next ${Number(waitRows[0].minutes || 0)} minutes, as queue is full.`,
-        "QUEUE_FULL",
-      );
-    }
-    if (booking.bookingDate === localDateKey() && !booking.scheduledTime) {
-      const [scheduled] = await connection.query(
-        `SELECT scheduled_time,duration_minutes FROM payment_bookings
-         WHERE shop_id=? AND barber_id=? AND booking_date=? AND scheduled_time IS NOT NULL
-           AND (
-             status IN ('payment_submitted','accepted')
-             AND COALESCE(queue_status, '') NOT IN
-               ('Cancelled','Completed','No Show')
-           )
-           AND scheduled_time > TIME(NOW())
-         ORDER BY scheduled_time ASC`,
-        [booking.shopId, booking.barberId, booking.bookingDate],
-      );
-      if (scheduled.length) {
-        const [ahead] = await connection.query(
-          `SELECT COALESCE(SUM(duration_minutes),0) AS minutes FROM payment_bookings
-           WHERE shop_id=? AND barber_id=? AND status='accepted'
-             AND queue_status IN ('Waiting','Your Turn','In Service')`,
-          [booking.shopId, booking.barberId],
-        );
-        const now = new Date();
-        const walkInWorkload =
-          Number(ahead[0].minutes || 0) + Number(booking.durationMinutes || 0);
-        const blockingAppointment = scheduled.find((appointment) => {
-          const available = minutesUntilAppointment(
-            booking.bookingDate,
-            appointment.scheduled_time,
-            now,
-          );
-          return (
-            walkInWorkload + Number(appointment.duration_minutes || 0) >
-            available
-          );
-        });
-        if (blockingAppointment)
-          throw AppError.conflict(
-            `Cannot take in queue because it would overlap the scheduled appointment at ${String(blockingAppointment.scheduled_time).slice(0, 5)}.`,
-            "APPOINTMENT_OVERLAP",
-          );
-      }
-    }
+    result = await acceptBookingCore(connection, booking, req.body?.token);
+    await connection.commit();
   } catch (error) {
     await connection.rollback().catch(() => {});
     connection.release();
     throw error;
   }
-  const nextFree = async () => {
-    const [[row]] = await connection.query(
-      "SELECT COALESCE(MAX(CAST(SUBSTRING(token,2) AS UNSIGNED)),0) AS n FROM payment_bookings WHERE shop_id=? AND token REGEXP '^A[0-9]+$'",
-      [booking.shopId],
-    );
-    return `A${String(Number(row.n) + 1).padStart(3, "0")}`;
-  };
+  connection.release();
 
-  let token = String(req.body?.token || "")
-    .trim()
-    .toUpperCase();
-  if (!/^A\d{3,6}$/.test(token)) token = await nextFree();
-
-  let tokenToUse = token;
-  let accepted = false;
-
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const [result] = await connection.query(
-        `UPDATE payment_bookings
-         SET status='accepted',
-             queue_status=IF(booking_date<>?, 'Prebooked', IF(scheduled_time IS NULL, 'Waiting', 'Scheduled')),
-             token=?, queue_id=?, payment_reference=?, accepted_at=NOW()
-         WHERE id=? AND status='payment_submitted'`,
-        [
-          localDateKey(),
-          tokenToUse,
-          `q-${booking.id}`,
-          `PAY-${booking.id}`,
-          booking.id,
-        ],
+  // affectedRows === 0 means concurrent handler already processed this booking
+  if (!result.accepted) {
+    if (result.affectedRows === 0) {
+      const [again] = await hydrateBookings(
+        await findBookings("b.id=?", [booking.id], "LIMIT 1"),
       );
-
-      if (!result.affectedRows) {
-        await connection.rollback();
-        connection.release();
-        const [again] = await hydrateBookings(
-          await findBookings("b.id=?", [booking.id], "LIMIT 1"),
-        );
-        if (again?.status === "accepted")
-          return res.json({ booking: again, alreadyAccepted: true });
-        return res
-          .status(409)
-          .json({ message: "This booking was already handled." });
-      }
-
-      accepted = true;
-      token = tokenToUse;
-      break;
-    } catch (error) {
-      if (error.code === "ER_DUP_ENTRY" && attempt < 2) {
-        tokenToUse = await nextFree();
-        continue;
-      }
-      await connection.rollback();
-      connection.release();
-      throw error;
+      if (again?.status === "accepted")
+        return res.json({ booking: again, alreadyAccepted: true });
+      return res
+        .status(409)
+        .json({ message: "This booking was already handled." });
     }
-  }
-
-  if (!accepted) {
-    await connection.rollback();
-    connection.release();
     return res
       .status(409)
       .json({ message: "Could not allocate a queue token. Please try again." });
   }
-  await connection.commit();
-  connection.release();
+
+  const { token } = result;
 
   await addNotification({
     userId: booking.customerId,
