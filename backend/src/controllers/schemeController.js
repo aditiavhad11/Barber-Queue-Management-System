@@ -5,6 +5,7 @@ import { effectiveOfferStatus, hasActiveNewCustomerOfferReservation, hasSuccessf
 import { WEEKDAY_CODES } from "../utils/happyHour.js";
 import { parseIds, parseObject } from "../utils/json.js";
 import { money } from "../utils/money.js";
+import { AppError } from "../utils/AppError.js";
 
 const bool = (value) => value === true || value === 1 || value === "1";
 const roundMoney = money;
@@ -88,7 +89,7 @@ function validateInput(body, partial = false, isNewOffer = false) {
   const maximumDiscount = body.maximumDiscount === "" || body.maximumDiscount == null ? null : Number(body.maximumDiscount);
   const usageLimit = body.usageLimit === "" || body.usageLimit == null ? null : Number(body.usageLimit);
   const perCustomerLimit = body.perCustomerLimit === "" || body.perCustomerLimit == null ? null : Number(body.perCustomerLimit);
-  const invalid = (message) => Object.assign(new Error(message), { status: 400 });
+  const invalid = (message) => AppError.badRequest(message, "INVALID_INPUT");
 
   if (!partial || body.title !== undefined) {
     if (!title || title.length > 120) throw invalid("Enter an offer title up to 120 characters.");
@@ -145,24 +146,47 @@ function validateInput(body, partial = false, isNewOffer = false) {
 
 async function validateScope(connection, shopId, form) {
   if (!form.allServices || form.offerType === "bogo") {
-    if (!form.serviceIds.length) throw Object.assign(new Error("Select at least one service or choose all services."), { status: 400 });
+    if (!form.serviceIds.length)
+      throw AppError.badRequest(
+        "Select at least one service or choose all services.",
+        "SERVICE_SELECTION_REQUIRED",
+      );
     const [rows] = await connection.query(
       `SELECT id FROM services WHERE shop_id=? ${form.offerType === "bogo" ? "AND enabled=1 " : ""}AND id IN (${form.serviceIds.map(() => "?").join(",")})`,
       [shopId, ...form.serviceIds],
     );
-    if (rows.length !== form.serviceIds.length) throw Object.assign(new Error("One or more services do not belong to this shop."), { status: 400 });
+    if (rows.length !== form.serviceIds.length)
+      throw AppError.badRequest(
+        "One or more services do not belong to this shop.",
+        "SERVICE_SHOP_MISMATCH",
+      );
   }
   if (form.offerType === "bogo") {
-    const [rewards] = await connection.query(`SELECT id FROM services WHERE shop_id=? AND enabled=1 AND id IN (${form.rewardServiceIds.map(() => "?").join(",")})`, [shopId, ...form.rewardServiceIds]);
-    if (rewards.length !== form.rewardServiceIds.length) throw Object.assign(new Error("Every free reward must be an enabled service in this shop."), { status: 400 });
+    const [rewards] = await connection.query(
+      `SELECT id FROM services WHERE shop_id=? AND enabled=1 AND id IN (${form.rewardServiceIds.map(() => "?").join(",")})`,
+      [shopId, ...form.rewardServiceIds],
+    );
+    if (rewards.length !== form.rewardServiceIds.length)
+      throw AppError.badRequest(
+        "Every free reward must be an enabled service in this shop.",
+        "REWARD_SHOP_MISMATCH",
+      );
   }
   if (!form.allBarbers) {
-    if (!form.barberIds.length) throw Object.assign(new Error("Select at least one barber or choose all barbers."), { status: 400 });
+    if (!form.barberIds.length)
+      throw AppError.badRequest(
+        "Select at least one barber or choose all barbers.",
+        "BARBER_SELECTION_REQUIRED",
+      );
     const [rows] = await connection.query(
       `SELECT id FROM barbers WHERE shop_id=? AND id IN (${form.barberIds.map(() => "?").join(",")})`,
       [shopId, ...form.barberIds],
     );
-    if (rows.length !== form.barberIds.length) throw Object.assign(new Error("One or more barbers do not belong to this shop."), { status: 400 });
+    if (rows.length !== form.barberIds.length)
+      throw AppError.badRequest(
+        "One or more barbers do not belong to this shop.",
+        "BARBER_SHOP_MISMATCH",
+      );
   }
 }
 
@@ -225,7 +249,11 @@ export async function createScheme(req, res) {
     await validateScope(connection, shopId, form);
     if (form.promoCode) {
       const [dupes] = await connection.query("SELECT id FROM schemes WHERE shop_id=? AND promo_code=? LIMIT 1", [shopId, form.promoCode]);
-      if (dupes.length) throw Object.assign(new Error("That promo code is already used by this shop."), { status: 409 });
+      if (dupes.length)
+        throw AppError.conflict(
+          "That promo code is already used by this shop.",
+          "PROMO_CODE_EXISTS",
+        );
     }
     const id = crypto.randomUUID();
     await connection.query(
@@ -243,7 +271,7 @@ export async function createScheme(req, res) {
     res.status(201).json({ scheme: mapScheme(rows[0]) });
   } catch (error) {
     await connection.rollback().catch(() => {});
-    res.status(error.status || (error.code === "ER_DUP_ENTRY" ? 409 : 500)).json({ message: error.message || "Could not save the offer." });
+    throw error;
   } finally { connection.release(); }
 }
 
@@ -256,11 +284,16 @@ export async function updateScheme(req, res) {
   try {
     await connection.beginTransaction();
     const [existing] = await connection.query("SELECT id FROM schemes WHERE id=? AND shop_id=? FOR UPDATE", [schemeId, shopId]);
-    if (!existing.length) throw Object.assign(new Error("Offer not found."), { status: 404 });
+    if (!existing.length)
+      throw AppError.notFound("Offer not found.", "OFFER_NOT_FOUND");
     await validateScope(connection, shopId, form);
     if (form.promoCode) {
       const [dupes] = await connection.query("SELECT id FROM schemes WHERE shop_id=? AND promo_code=? AND id<>? LIMIT 1", [shopId, form.promoCode, schemeId]);
-      if (dupes.length) throw Object.assign(new Error("That promo code is already used by this shop."), { status: 409 });
+      if (dupes.length)
+        throw AppError.conflict(
+          "That promo code is already used by this shop.",
+          "PROMO_CODE_EXISTS",
+        );
     }
     await connection.query(
       `UPDATE schemes SET title=?,description=?,image_url=?,terms=?,offer_type=?,buy_quantity=?,free_quantity=?,required_service_quantities_json=?,reward_service_id=?,reward_service_ids_json=?,max_reward_count=?,discount_type=?,discount_value=?,starts_at=?,ends_at=?,
@@ -276,6 +309,6 @@ export async function updateScheme(req, res) {
     res.json({ scheme: mapScheme(rows[0]) });
   } catch (error) {
     await connection.rollback().catch(() => {});
-    res.status(error.status || (error.code === "ER_DUP_ENTRY" ? 409 : 500)).json({ message: error.message || "Could not update the offer." });
+    throw error;
   } finally { connection.release(); }
 }

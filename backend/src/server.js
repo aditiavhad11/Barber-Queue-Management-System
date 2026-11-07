@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { healthcheck } from "./config/db.js";
-import { ensureSchema } from "./config/ensureSchema.js";
+import { runMigrations } from "./config/migrate.js";
 import authRoutes from "./routes/authRoutes.js";
 import shopRoutes from "./routes/shopRoutes.js";
 import reviewRoutes from "./routes/reviewRoutes.js";
@@ -12,6 +12,7 @@ import bookingRoutes from "./routes/bookingRoutes.js";
 import complaintRoutes from "./routes/complaintRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
 import schemeRoutes from "./routes/schemeRoutes.js";
+import errorHandler from "./middleware/errorHandler.js";
 import "./jobs/emergencyClosureQueue.js";
 import { startScheduledQueueWorker } from "./services/scheduledQueueService.js";
 dotenv.config();
@@ -67,16 +68,11 @@ app.use("/api/complaints", complaintRoutes);
 app.use("/api/uploads", uploadRoutes);
 app.use("/api/schemes", schemeRoutes);
 
-app.use((err, _req, res, _next) => {
-  console.error(err);
-  res
-    .status(err.status || 500)
-    .json({ message: err.message || "Server error." });
-});
+app.use(errorHandler);
 
-ensureSchema()
+runMigrations()
   .then(() => startScheduledQueueWorker())
-  .catch((e) => console.error("Schema check failed:", e.message));
+  .catch((e) => console.error("Database migration failed:", e.message));
 
 app.listen(Number(process.env.PORT || 4000), () =>
   console.log(

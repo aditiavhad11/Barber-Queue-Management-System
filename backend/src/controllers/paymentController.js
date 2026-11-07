@@ -6,6 +6,7 @@ import { isWithinHappyHour } from "../utils/happyHour.js";
 import { calculateOfferDiscount } from "../utils/offerDiscount.js";
 import { jsonIds, parseJson } from "../utils/json.js";
 import { money } from "../utils/money.js";
+import { AppError } from "../utils/AppError.js";
 import {
   clockMinutes,
   localDateKey,
@@ -158,24 +159,34 @@ async function validateSelection(
     [shopId],
   );
   if (!shops.length)
-    throw Object.assign(
-      new Error("This shop is not accepting bookings right now."),
-      { status: 404 },
+    throw AppError.notFound(
+      "This shop is not accepting bookings right now.",
+      "SHOP_NOT_FOUND",
     );
+
+  const [closures] = await connection
+    .query(
+      `SELECT id, closure_type, start_at, end_at, reason
+       FROM emergency_closures
+       WHERE shop_id=? AND status='active' AND (end_at IS NULL OR end_at > NOW())
+       ORDER BY start_at DESC`,
+      [shopId],
+    )
+    .catch(() => [[]]);
 
   const avail = parseJson(shops[0].availability_json, {});
   const now = new Date();
   const today = todayIST(now);
   const currentTime = nowTimeIST(now);
-  const emergencyEnd = avail.temporaryClosure?.endAt
-    ? new Date(avail.temporaryClosure.endAt)
-    : null;
-  const emergencyExpired =
-    avail.emergencyClosed && emergencyEnd && emergencyEnd <= new Date();
-  if (avail.isOpen === false && !emergencyExpired) {
-    throw Object.assign(new Error("This shop is currently closed."), {
-      status: 409,
-    });
+
+  const ongoingClosure = closures.find((c) => {
+    const start = new Date(c.start_at);
+    const end = c.end_at ? new Date(c.end_at) : null;
+    return start <= now && (!end || end > now);
+  });
+
+  if (ongoingClosure || (avail.isOpen === false && !avail.emergencyClosed)) {
+    throw AppError.conflict("This shop is currently closed.", "SHOP_CLOSED");
   }
   const bookingWeekday = weekdayIST(bookingDate);
   const annual = avail.annualSchedules?.[bookingDate];
@@ -185,11 +196,9 @@ async function validateSelection(
     !manualOpenToday &&
     (annual?.type === "closed" || (!annual && schedule?.closed))
   ) {
-    throw Object.assign(
-      new Error("This shop is closed on the selected booking date."),
-      {
-        status: 409,
-      },
+    throw AppError.conflict(
+      "This shop is closed on the selected booking date.",
+      "SHOP_CLOSED_ON_DATE",
     );
   }
   if (bookingDate === today) {
@@ -215,35 +224,64 @@ async function validateSelection(
           (shift) => currentTime >= shift.open && currentTime < shift.close,
         ))
     ) {
-      throw Object.assign(
-        new Error("This shop is outside its booking hours right now."),
-        { status: 409 },
+      throw AppError.conflict(
+        "This shop is outside its booking hours right now.",
+        "OUTSIDE_BOOKING_HOURS",
       );
     }
   }
+
+  // Emergency closure check (emergency_closures table is single source of truth)
+  for (const c of closures) {
+    const startAt = new Date(c.start_at);
+    const endAt = c.end_at ? new Date(c.end_at) : null;
+    if (endAt && endAt <= now) continue;
+
+    const startDate = todayIST(startAt);
+    const endDate = endAt ? todayIST(endAt) : "";
+
+    const hourClosureApplies =
+      c.closure_type === "hours" &&
+      bookingDate === startDate &&
+      startAt <= now &&
+      (!endAt || now < endAt);
+
+    const dayClosureApplies =
+      c.closure_type !== "hours" &&
+      bookingDate >= startDate &&
+      (!endDate || bookingDate <= endDate);
+
+    if (hourClosureApplies || dayClosureApplies) {
+      const reasonPart = c.reason ? ` (${c.reason})` : "";
+      const untilPart = endDate ? ` until ${endDate}` : "";
+      throw AppError.conflict(
+        `This shop is temporarily closed for emergency${reasonPart}${untilPart}.`,
+        "SHOP_EMERGENCY_CLOSED",
+      );
+    }
+  }
+
+  // Fallback for legacy / mock availability_json with temporaryClosure
   const tc = avail?.temporaryClosure;
-  if (tc && tc.active) {
-    if (tc.endAt && new Date(tc.endAt) <= new Date()) {
-      // The server-side timestamp is authoritative; an expired hour closure
-      // must not keep blocking new bookings because the UI was not refreshed.
+  if (!closures.length && tc && tc.active) {
+    if (tc.endAt && new Date(tc.endAt) <= now) {
+      // The server-side timestamp is authoritative; expired closure ignored
     } else {
       const start = tc.startDate || today;
       const end = tc.endDate || "";
       const hourClosureApplies =
         tc.startAt &&
         bookingDate === String(tc.startAt).slice(0, 10) &&
-        new Date(tc.startAt) <= new Date() &&
-        (!tc.endAt || new Date() < new Date(tc.endAt));
+        new Date(tc.startAt) <= now &&
+        (!tc.endAt || now < new Date(tc.endAt));
       const dayClosureApplies =
         !tc.startAt && bookingDate >= start && (!end || bookingDate <= end);
       if (hourClosureApplies || dayClosureApplies) {
         const reasonPart = tc.reason ? ` (${tc.reason})` : "";
         const untilPart = end ? ` until ${end}` : "";
-        throw Object.assign(
-          new Error(
-            `This shop is temporarily closed for emergency${reasonPart}${untilPart}.`,
-          ),
-          { status: 409 },
+        throw AppError.conflict(
+          `This shop is temporarily closed for emergency${reasonPart}${untilPart}.`,
+          "SHOP_EMERGENCY_CLOSED",
         );
       }
     }
@@ -251,7 +289,10 @@ async function validateSelection(
   if (!manualOpenToday) assertAnnualScheduleAllowsBooking(avail, bookingDate);
 
   if (!shops[0].upi_qr_url)
-    throw Object.assign(new Error("This shop can't take bookings yet."), {
+    throw AppError.conflict(
+      "This shop can't take bookings yet.",
+      "SHOP_NOT_CONFIGURED",
+    );
       status: 409,
     });
 
@@ -1013,9 +1054,7 @@ export async function paymentQuote(req, res) {
       quoteToken: signQuote(quotePayload),
     });
   } catch (error) {
-    res
-      .status(error.status || 500)
-      .json({ message: error.message || "Could not prepare payment." });
+    throw error;
   } finally {
     connection.release();
   }
@@ -1259,13 +1298,8 @@ export async function submitPayment(req, res) {
 
     res.status(201).json({ booking });
   } catch (error) {
-    console.log(error);
     await connection.rollback().catch(() => {});
-    res.status(error.status || 500).json({
-      message: error.message || "Could not submit the payment.",
-      bookingId: error.bookingId,
-      amount: error.amount,
-    });
+    throw error;
   } finally {
     connection.release();
   }

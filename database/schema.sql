@@ -131,6 +131,10 @@ CREATE TABLE IF NOT EXISTS customers (
   FOREIGN KEY (shop_id) REFERENCES shops(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
+-- =====================================================================
+-- DEPRECATED: queue_entries (Replaced by `payment_bookings`)
+-- Retained solely for historical migration backwards-compatibility.
+-- =====================================================================
 CREATE TABLE IF NOT EXISTS queue_entries (
   id CHAR(36) PRIMARY KEY,
   shop_id CHAR(36) NOT NULL,
@@ -151,6 +155,10 @@ CREATE TABLE IF NOT EXISTS queue_entries (
   INDEX idx_queue_customer (customer_id, status)
 ) ENGINE=InnoDB;
 
+-- =====================================================================
+-- DEPRECATED: payments (Replaced by `payment_bookings`)
+-- Retained solely for historical migration backwards-compatibility.
+-- =====================================================================
 CREATE TABLE IF NOT EXISTS payments (
   id CHAR(36) PRIMARY KEY,
   shop_id CHAR(36) NOT NULL,
@@ -205,6 +213,9 @@ CREATE TABLE IF NOT EXISTS schemes (
   INDEX idx_scheme_shop_status (shop_id,status,starts_at,ends_at)
 ) ENGINE=InnoDB;
 
+-- =====================================================================
+-- DEPRECATED: refunds (Replaced by booking_service_edits / payment_bookings refund fields)
+-- =====================================================================
 CREATE TABLE IF NOT EXISTS refunds (
   id CHAR(36) PRIMARY KEY,
   payment_id CHAR(36) NOT NULL,
@@ -217,6 +228,9 @@ CREATE TABLE IF NOT EXISTS refunds (
   FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
+-- =====================================================================
+-- DEPRECATED: reviews (Replaced by `booking_reviews`)
+-- =====================================================================
 CREATE TABLE IF NOT EXISTS reviews (
   id CHAR(36) PRIMARY KEY,
   shop_id CHAR(36) NOT NULL,
