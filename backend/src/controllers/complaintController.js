@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { pool } from "../config/db.js";
+import { AppError } from "../utils/AppError.js";
 
 const complaintSelect = `SELECT c.id, c.customer_id, c.shop_id, c.issue, s.name AS shop_name,
   c.target_type, c.target_barber_id, b.name AS target_barber_name,
@@ -28,27 +29,34 @@ const mapComplaint = (row) => ({
 });
 
 export async function createComplaint(req, res) {
-  const shopId = String(req.body?.shopId || "");
-  const targetType = String(req.body?.targetType || "").toLowerCase();
-  const targetBarberId = req.body?.targetBarberId ? String(req.body.targetBarberId) : null;
-  const issueType = String(req.body?.issueType || "Other").trim().slice(0, 80);
-  const subject = String(req.body?.subject || "").trim().slice(0, 190);
-  const description = String(req.body?.description || "").trim().slice(0, 5000);
-  if (!shopId || !subject || !description)
-    return res.status(400).json({ message: "Shop, subject and description are required." });
-  if (!/^[\w\s.,?!'"()\-]{3,190}$/.test(subject))
-    return res.status(400).json({ message: "Subject must be between 3 and 190 characters." });
-  if (description.length < 5)
-    return res.status(400).json({ message: "Description must be at least 5 characters long." });
-  if (!/^(staff|owner)$/.test(targetType))
-    return res.status(400).json({ message: "Choose whether the complaint is about staff or the shop owner." });
-  if ((targetType === "staff") !== Boolean(targetBarberId))
-    return res.status(400).json({ message: "Choose a staff member for staff complaints only." });
-  const [shops] = await pool.query("SELECT id FROM shops WHERE id=? AND status='approved' LIMIT 1", [shopId]);
-  if (!shops.length) return res.status(404).json({ message: "The selected shop was not found." });
+  const {
+    shopId,
+    targetType,
+    targetBarberId = null,
+    issueType = "Other",
+    subject,
+    description,
+  } = req.body;
+
+  const [shops] = await pool.query(
+    "SELECT id FROM shops WHERE id=? AND status='approved' LIMIT 1",
+    [shopId],
+  );
+  if (!shops.length) {
+    throw AppError.notFound("The selected shop was not found.", "SHOP_NOT_FOUND");
+  }
+
   if (targetType === "staff") {
-    const [barbers] = await pool.query("SELECT id FROM barbers WHERE id=? AND shop_id=? LIMIT 1", [targetBarberId, shopId]);
-    if (!barbers.length) return res.status(400).json({ message: "That staff member does not belong to the selected shop." });
+    const [barbers] = await pool.query(
+      "SELECT id FROM barbers WHERE id=? AND shop_id=? LIMIT 1",
+      [targetBarberId, shopId],
+    );
+    if (!barbers.length) {
+      throw AppError.badRequest(
+        "That staff member does not belong to the selected shop.",
+        "STAFF_MISMATCH",
+      );
+    }
   }
   const id = crypto.randomUUID();
   await pool.query(
@@ -100,16 +108,25 @@ async function updateStatus(req, res, resolver) {
     );
     if (!rows.length) {
       await connection.rollback();
-      return res.status(404).json({ message: "Complaint not found or you are not allowed to resolve it." });
+      throw AppError.notFound(
+        "Complaint not found or you are not allowed to resolve it.",
+        "COMPLAINT_NOT_FOUND",
+      );
     }
     const complaint = rows[0];
     if (complaint.status === "closed") {
       await connection.rollback();
-      return res.status(409).json({ message: "A closed complaint cannot be changed." });
+      throw AppError.conflict(
+        "A closed complaint cannot be changed.",
+        "COMPLAINT_CLOSED",
+      );
     }
     if (complaint.status === "resolved" && nextStatus !== "resolved") {
       await connection.rollback();
-      return res.status(409).json({ message: "A resolved complaint cannot be reopened." });
+      throw AppError.conflict(
+        "A resolved complaint cannot be reopened.",
+        "COMPLAINT_RESOLVED",
+      );
     }
     const changed = complaint.status !== nextStatus;
     if (changed) {

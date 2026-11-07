@@ -6,6 +6,7 @@ import { isWithinHappyHour } from "../utils/happyHour.js";
 import { calculateOfferDiscount } from "../utils/offerDiscount.js";
 import { jsonIds, parseJson } from "../utils/json.js";
 import { money } from "../utils/money.js";
+import { AppError } from "../utils/AppError.js";
 import {
   clockMinutes,
   localDateKey,
@@ -1013,9 +1014,7 @@ export async function paymentQuote(req, res) {
       quoteToken: signQuote(quotePayload),
     });
   } catch (error) {
-    res
-      .status(error.status || 500)
-      .json({ message: error.message || "Could not prepare payment." });
+    throw error;
   } finally {
     connection.release();
   }
@@ -1259,13 +1258,8 @@ export async function submitPayment(req, res) {
 
     res.status(201).json({ booking });
   } catch (error) {
-    console.log(error);
     await connection.rollback().catch(() => {});
-    res.status(error.status || 500).json({
-      message: error.message || "Could not submit the payment.",
-      bookingId: error.bookingId,
-      amount: error.amount,
-    });
+    throw error;
   } finally {
     connection.release();
   }

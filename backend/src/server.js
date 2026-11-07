@@ -12,6 +12,7 @@ import bookingRoutes from "./routes/bookingRoutes.js";
 import complaintRoutes from "./routes/complaintRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
 import schemeRoutes from "./routes/schemeRoutes.js";
+import errorHandler from "./middleware/errorHandler.js";
 import "./jobs/emergencyClosureQueue.js";
 import { startScheduledQueueWorker } from "./services/scheduledQueueService.js";
 dotenv.config();
@@ -67,12 +68,7 @@ app.use("/api/complaints", complaintRoutes);
 app.use("/api/uploads", uploadRoutes);
 app.use("/api/schemes", schemeRoutes);
 
-app.use((err, _req, res, _next) => {
-  console.error(err);
-  res
-    .status(err.status || 500)
-    .json({ message: err.message || "Server error." });
-});
+app.use(errorHandler);
 
 ensureSchema()
   .then(() => startScheduledQueueWorker())

@@ -18,15 +18,18 @@ import {
 
 import { parseJson } from "../utils/json.js";
 import { localDateKey, isValidDateKey } from "../utils/time.js";
+import { AppError } from "../utils/AppError.js";
 
 /* ------------------------------------------------------------------ */
 /* Small helpers                                                       */
 /* ------------------------------------------------------------------ */
 
-const notOwned = (res) =>
-  res
-    .status(404)
-    .json({ message: "Shop not found or not owned by this account." });
+const notOwned = () => {
+  throw AppError.notFound(
+    "Shop not found or not owned by this account.",
+    "SHOP_NOT_FOUND",
+  );
+};
 
 const toUtcDateTime = (value) => {
   const date = new Date(value);

@@ -16,6 +16,7 @@ import {
   localDateKey,
   minutesUntilAppointment,
 } from "../utils/time.js";
+import { AppError } from "../utils/AppError.js";
 
 const SERVICE_EDIT_QUEUE_STATUSES = ["Waiting", "Your Turn"];
 
@@ -83,9 +84,9 @@ async function serviceMapForEditRows(rows) {
 async function validateEditedServices(connection, booking, serviceIds) {
   const ids = serviceIds;
   if (!ids.length || ids.length > 20 || new Set(ids).size !== ids.length)
-    throw Object.assign(
-      new Error("Choose between 1 and 20 different services."),
-      { status: 400 },
+    throw AppError.badRequest(
+      "Choose between 1 and 20 different services.",
+      "INVALID_SERVICE_SELECTION",
     );
   const marks = ids.map(() => "?").join(",");
   const [services] = await connection.query(
@@ -96,11 +97,9 @@ async function validateEditedServices(connection, booking, serviceIds) {
     services.length !== ids.length ||
     services.some((service) => !service.enabled)
   )
-    throw Object.assign(
-      new Error(
-        "One or more selected services are no longer available at this shop.",
-      ),
-      { status: 400 },
+    throw AppError.badRequest(
+      "One or more selected services are no longer available at this shop.",
+      "SERVICES_UNAVAILABLE",
     );
   const availability =
     typeof booking.availability_json === "string"
@@ -113,19 +112,18 @@ async function validateEditedServices(connection, booking, serviceIds) {
         })()
       : booking.availability_json || {};
   if (availability.annualSchedules?.[booking.booking_date]?.type === "closed")
-    throw Object.assign(new Error("The shop is closed on this booking date."), {
-      status: 409,
-    });
+    throw AppError.conflict(
+      "The shop is closed on this booking date.",
+      "SHOP_CLOSED",
+    );
   const [barbers] = await connection.query(
     "SELECT status FROM barbers WHERE id=? AND shop_id=? LIMIT 1",
     [booking.barber_id, booking.shop_id],
   );
   if (!barbers.length || barbers[0].status !== "Available")
-    throw Object.assign(
-      new Error(
-        "The selected barber is not available for service changes right now.",
-      ),
-      { status: 409 },
+    throw AppError.conflict(
+      "The selected barber is not available for service changes right now.",
+      "BARBER_UNAVAILABLE",
     );
   let unavailable;
   try {
@@ -137,18 +135,17 @@ async function validateEditedServices(connection, booking, serviceIds) {
     );
   } catch (error) {
     if (error.code === "ER_NO_SUCH_TABLE")
-      throw Object.assign(
-        new Error("Service availability could not be checked right now."),
-        { status: 503 },
+      throw new AppError(
+        "Service availability could not be checked right now.",
+        503,
+        "SERVICE_CHECK_UNAVAILABLE",
       );
     throw error;
   }
   if (unavailable.length)
-    throw Object.assign(
-      new Error(
-        `${unavailable[0].name} is unavailable on the booking date${unavailable[0].reason ? `: ${unavailable[0].reason}` : "."}`,
-      ),
-      { status: 409 },
+    throw AppError.conflict(
+      `${unavailable[0].name} is unavailable on the booking date${unavailable[0].reason ? `: ${unavailable[0].reason}` : "."}`,
+      "SERVICE_DATE_UNAVAILABLE",
     );
   return ids.map((id) => services.find((service) => service.id === id));
 }
@@ -735,9 +732,9 @@ export async function acceptBooking(req, res) {
     );
     const limit = Number(barberRows[0]?.queue_limit || 0);
     if (!limit)
-      throw Object.assign(
-        new Error("This barber has no valid queue capacity configured."),
-        { status: 409 },
+      throw AppError.conflict(
+        "This barber has no valid queue capacity configured.",
+        "QUEUE_CAPACITY_NOT_CONFIGURED",
       );
     const [activeRows] = await connection.query(
       `SELECT COUNT(*) AS total FROM payment_bookings
@@ -752,11 +749,9 @@ export async function acceptBooking(req, res) {
            AND queue_status IN ('Waiting','Your Turn','In Service')`,
         [booking.shopId, booking.barberId],
       );
-      throw Object.assign(
-        new Error(
-          `Cannot take in queue till for next ${Number(waitRows[0].minutes || 0)} minutes, as queue is full.`,
-        ),
-        { status: 409 },
+      throw AppError.conflict(
+        `Cannot take in queue till for next ${Number(waitRows[0].minutes || 0)} minutes, as queue is full.`,
+        "QUEUE_FULL",
       );
     }
     if (booking.bookingDate === localDateKey() && !booking.scheduledTime) {
@@ -794,20 +789,16 @@ export async function acceptBooking(req, res) {
           );
         });
         if (blockingAppointment)
-          throw Object.assign(
-            new Error(
-              `Cannot take in queue because it would overlap the scheduled appointment at ${String(blockingAppointment.scheduled_time).slice(0, 5)}.`,
-            ),
-            { status: 409 },
+          throw AppError.conflict(
+            `Cannot take in queue because it would overlap the scheduled appointment at ${String(blockingAppointment.scheduled_time).slice(0, 5)}.`,
+            "APPOINTMENT_OVERLAP",
           );
       }
     }
   } catch (error) {
     await connection.rollback().catch(() => {});
     connection.release();
-    return res
-      .status(error.status || 500)
-      .json({ message: error.message || "Could not validate queue capacity." });
+    throw error;
   }
   const nextFree = async () => {
     const [[row]] = await connection.query(
@@ -1001,7 +992,7 @@ export async function saveUpiSettings(req, res) {
     [qrUrl || null, String(req.body?.shopId || ""), ...params],
   );
   if (!result.affectedRows)
-    return res.status(404).json({ message: "Shop not found." });
+    throw AppError.notFound("Shop not found.", "SHOP_NOT_FOUND");
   res.json({ ok: true, qrUrl });
 }
 
@@ -1015,16 +1006,14 @@ export async function deleteBookingHistory(req, res) {
       [req.params.id, ...params],
     );
     if (!rows.length)
-      throw Object.assign(
-        new Error("Payment record not found for this shop."),
-        { status: 404 },
+      throw AppError.notFound(
+        "Payment record not found for this shop.",
+        "PAYMENT_NOT_FOUND",
       );
     if (!["Completed", "Cancelled"].includes(rows[0].queue_status)) {
-      throw Object.assign(
-        new Error(
-          "Only completed or cancelled payment records can be deleted.",
-        ),
-        { status: 409 },
+      throw AppError.conflict(
+        "Only completed or cancelled payment records can be deleted.",
+        "PAYMENT_STATUS_INVALID",
       );
     }
     if (rows[0].queue_id)
