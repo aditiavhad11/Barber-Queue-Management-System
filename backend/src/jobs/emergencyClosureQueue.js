@@ -23,6 +23,11 @@ function createRedisConnection() {
       : {}),
     ...(redisUrl?.protocol === "rediss:" ? { tls: {} } : {}),
     maxRetriesPerRequest: null,
+    enableOfflineQueue: false,
+    retryStrategy: (times) => {
+      if (process.env.NODE_ENV === "test" || times > 2) return null;
+      return Math.min(times * 1000, 5000);
+    },
   };
 }
 
@@ -30,6 +35,10 @@ const connection = createRedisConnection();
 
 export const emergencyClosureQueue = new Queue(QUEUE_NAME, {
   connection,
+});
+
+emergencyClosureQueue.on("error", (error) => {
+  console.error("[emergency-closure-queue] Error:", error.message);
 });
 
 const publicUrl = (path) =>
@@ -96,80 +105,109 @@ async function sendEmailsInBatches(bookings, closure) {
   }
 }
 
-export const emergencyClosureWorker = new Worker(
-  QUEUE_NAME,
-  async (job) => {
-    const { shopId, closure } = job.data;
+export let emergencyClosureWorker = null;
 
+export function startEmergencyClosureWorker() {
+  if (emergencyClosureWorker) return emergencyClosureWorker;
 
-    console.info("[emergency-closure] email worker started", {
-      jobId: job.id,
-      shopId,
-    });
+  emergencyClosureWorker = new Worker(
+    QUEUE_NAME,
+    async (job) => {
+      const { shopId, closure } = job.data;
 
-    const bookingIds = Array.isArray(closure.bookingIds)
-      ? closure.bookingIds.filter(Boolean)
-      : [];
-
-    // The closure transaction records the exact affected bookings. Never fall
-    // back to all emergency-closed bookings: that can send an old closure's
-    // email to a customer from a later closure.
-    if (!bookingIds.length) {
-      console.info("[emergency-closure] no bookings recorded for job", {
+      console.info("[emergency-closure] email worker started", {
         jobId: job.id,
         shopId,
       });
-      return { shopId, bookingsProcessed: 0, emailsAttempted: 0 };
-    }
 
-    const [bookings] = await pool.query(
-      `SELECT
-         b.id,
-         b.token,
-         u.id AS customer_id,
-         u.name AS customer_name,
-         u.email,
-         s.name AS shop_name,
-         bar.name AS barber_name
-       FROM payment_bookings b
-       JOIN users u ON u.id = b.customer_id
-       JOIN shops s ON s.id = b.shop_id
-       JOIN barbers bar ON bar.id = b.barber_id
-       WHERE b.shop_id = ?
-         AND b.status = 'accepted'
-         AND (b.queue_status = 'Emergency Closed'
-              OR (b.queue_status = 'Cancelled' AND b.closure_choice = 'refund'))
-         AND b.id IN (${bookingIds.map(() => "?").join(",")})`,
-      [shopId, ...bookingIds],
-    );
+      const bookingIds = Array.isArray(closure.bookingIds)
+        ? closure.bookingIds.filter(Boolean)
+        : [];
 
-    if (bookings.length === 0) return;
+      // The closure transaction records the exact affected bookings. Never fall
+      // back to all emergency-closed bookings: that can send an old closure's
+      // email to a customer from a later closure.
+      if (!bookingIds.length) {
+        console.info("[emergency-closure] no bookings recorded for job", {
+          jobId: job.id,
+          shopId,
+        });
+        return { shopId, bookingsProcessed: 0, emailsAttempted: 0 };
+      }
 
-    // In-app notifications are written transactionally when the closure starts.
-    // This job is intentionally responsible only for asynchronous email delivery.
+      const [bookings] = await pool.query(
+        `SELECT
+           b.id,
+           b.token,
+           u.id AS customer_id,
+           u.name AS customer_name,
+           u.email,
+           s.name AS shop_name,
+           bar.name AS barber_name
+         FROM payment_bookings b
+         JOIN users u ON u.id = b.customer_id
+         JOIN shops s ON s.id = b.shop_id
+         JOIN barbers bar ON bar.id = b.barber_id
+         WHERE b.shop_id = ?
+           AND b.status = 'accepted'
+           AND (b.queue_status = 'Emergency Closed'
+                OR (b.queue_status = 'Cancelled' AND b.closure_choice = 'refund'))
+           AND b.id IN (${bookingIds.map(() => "?").join(",")})`,
+        [shopId, ...bookingIds],
+      );
 
-    await sendEmailsInBatches(bookings, closure);
+      if (bookings.length === 0) return;
 
-    console.info("[emergency-closure] email worker completed", {
-      jobId: job.id,
-      shopId,
-      bookingsProcessed: bookings.length,
-    });
-    return {
-      shopId,
-      bookingsProcessed: bookings.length,
-      emailsAttempted: bookings.filter((booking) => booking.email).length,
-    };
-  },
-  {
-    connection,
-    concurrency: 5,
-  },
-);
+      // In-app notifications are written transactionally when the closure starts.
+      // This job is intentionally responsible only for asynchronous email delivery.
 
-emergencyClosureWorker.on("failed", (job, error) => {
-  console.error(
-    `Emergency closure notification job failed${job ? ` (${job.id})` : ""}:`,
-    error.message,
+      await sendEmailsInBatches(bookings, closure);
+
+      console.info("[emergency-closure] email worker completed", {
+        jobId: job.id,
+        shopId,
+        bookingsProcessed: bookings.length,
+      });
+      return {
+        shopId,
+        bookingsProcessed: bookings.length,
+        emailsAttempted: bookings.filter((booking) => booking.email).length,
+      };
+    },
+    {
+      connection,
+      concurrency: 5,
+    },
   );
-});
+
+  emergencyClosureWorker.on("failed", (job, error) => {
+    console.error(
+      `Emergency closure notification job failed${job ? ` (${job.id})` : ""}:`,
+      error.message,
+    );
+  });
+
+  emergencyClosureWorker.on("error", (error) => {
+    console.error("[emergency-closure-worker] Error:", error.message);
+  });
+
+  return emergencyClosureWorker;
+}
+
+export async function stopEmergencyClosureWorker() {
+  if (emergencyClosureWorker) {
+    try {
+      await emergencyClosureWorker.close();
+    } catch (e) {
+      console.error("[emergency-closure-worker] Error closing worker:", e.message);
+    }
+    emergencyClosureWorker = null;
+  }
+  if (emergencyClosureQueue) {
+    try {
+      await emergencyClosureQueue.close();
+    } catch (e) {
+      console.error("[emergency-closure-queue] Error closing queue:", e.message);
+    }
+  }
+}

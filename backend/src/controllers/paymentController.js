@@ -293,8 +293,6 @@ async function validateSelection(
       "This shop can't take bookings yet.",
       "SHOP_NOT_CONFIGURED",
     );
-      status: 409,
-    });
 
   const [barbers] = await connection.query(
     "SELECT id,status,queue_limit FROM barbers WHERE id=? AND shop_id=? LIMIT 1",

@@ -164,9 +164,12 @@ export function requestScheduledQueueRecalculation(options = {}) {
   });
 }
 
+let scheduledQueueTimer = null;
+
 export function startScheduledQueueWorker({
   intervalMs = Number(process.env.SCHEDULED_QUEUE_INTERVAL_MS || 20000),
 } = {}) {
+  if (scheduledQueueTimer) return scheduledQueueTimer;
   const interval = Math.min(30000, Math.max(15000, intervalMs));
   let running = false;
   const run = async () => {
@@ -182,7 +185,14 @@ export function startScheduledQueueWorker({
   };
 
   run();
-  const timer = setInterval(run, interval);
-  timer.unref?.();
-  return timer;
+  scheduledQueueTimer = setInterval(run, interval);
+  scheduledQueueTimer.unref?.();
+  return scheduledQueueTimer;
+}
+
+export function stopScheduledQueueWorker() {
+  if (scheduledQueueTimer) {
+    clearInterval(scheduledQueueTimer);
+    scheduledQueueTimer = null;
+  }
 }

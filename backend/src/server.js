@@ -1,7 +1,9 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { healthcheck } from "./config/db.js";
+import { healthcheck, pool } from "./config/db.js";
 import { runMigrations } from "./config/migrate.js";
 import authRoutes from "./routes/authRoutes.js";
 import shopRoutes from "./routes/shopRoutes.js";
@@ -13,17 +15,26 @@ import complaintRoutes from "./routes/complaintRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
 import schemeRoutes from "./routes/schemeRoutes.js";
 import errorHandler from "./middleware/errorHandler.js";
-import "./jobs/emergencyClosureQueue.js";
-import { startScheduledQueueWorker } from "./services/scheduledQueueService.js";
+import {
+  startEmergencyClosureWorker,
+  stopEmergencyClosureWorker,
+} from "./jobs/emergencyClosureQueue.js";
+import {
+  startScheduledQueueWorker,
+  stopScheduledQueueWorker,
+} from "./services/scheduledQueueService.js";
+import { httpLogger, logger } from "./utils/logger.js";
+
 dotenv.config();
 
 if (!process.env.JWT_SECRET) {
-  console.error(
+  logger.fatal(
     "JWT_SECRET is missing in backend/.env. Copy .env.example to .env and set it.",
   );
   process.exit(1);
 }
-const app = express();
+
+export const app = express();
 const allowedOrigins = (process.env.CLIENT_URL || "")
   .split(",")
   .map((x) => x.trim())
@@ -47,6 +58,7 @@ app.use(
   }),
 );
 
+app.use(httpLogger);
 app.use(express.json({ limit: "10mb" }));
 
 app.get("/api/health", async (_req, res) => {
@@ -70,12 +82,89 @@ app.use("/api/schemes", schemeRoutes);
 
 app.use(errorHandler);
 
-runMigrations()
-  .then(() => startScheduledQueueWorker())
-  .catch((e) => console.error("Database migration failed:", e.message));
+let isShuttingDown = false;
 
-app.listen(Number(process.env.PORT || 4000), () =>
-  console.log(
-    `Barber Queue API running on http://localhost:${process.env.PORT || 4000}`,
-  ),
-);
+export function setupGracefulShutdown(server) {
+  const shutdown = async (signal) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    logger.info({ signal }, "Shutdown signal received. Starting graceful shutdown...");
+
+    const forceExitTimer = setTimeout(() => {
+      logger.fatal("Graceful shutdown timeout exceeded (10s). Forcing process exit.");
+      process.exit(1);
+    }, 10000);
+    forceExitTimer.unref?.();
+
+    server.close(async (err) => {
+      if (err) {
+        logger.error({ err }, "Error closing HTTP server");
+      } else {
+        logger.info("HTTP server closed to new requests.");
+      }
+
+      try {
+        logger.info("Stopping background queue workers...");
+        await stopEmergencyClosureWorker();
+        stopScheduledQueueWorker();
+        logger.info("Background queue workers stopped.");
+
+        logger.info("Closing database connection pool...");
+        await pool.end();
+        logger.info("Database connection pool closed.");
+
+        logger.info("Graceful shutdown completed successfully.");
+        clearTimeout(forceExitTimer);
+        process.exit(0);
+      } catch (shutdownErr) {
+        logger.error({ err: shutdownErr }, "Error during graceful shutdown cleanup");
+        process.exit(1);
+      }
+    });
+  };
+
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+}
+
+export async function startServer() {
+  try {
+    // 1. DB check
+    logger.info("Verifying database connection...");
+    await healthcheck();
+    logger.info("Database connection verified successfully.");
+
+    // 2. Migrations
+    logger.info("Running database migrations...");
+    await runMigrations();
+    logger.info("Database migrations applied successfully.");
+
+    // 3. Worker start
+    logger.info("Starting background queue workers...");
+    startEmergencyClosureWorker();
+    startScheduledQueueWorker();
+    logger.info("Background queue workers started.");
+
+    // 4. Listen
+    const port = Number(process.env.PORT || 4000);
+    const server = app.listen(port, () => {
+      logger.info(
+        `Barber Queue API running on http://localhost:${port}`,
+      );
+    });
+
+    setupGracefulShutdown(server);
+    return server;
+  } catch (error) {
+    logger.fatal({ err: error }, "Server startup failed. Exiting process.");
+    process.exit(1);
+  }
+}
+
+const isMainModule =
+  process.argv[1] &&
+  fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+
+if (isMainModule && process.env.NODE_ENV !== "test") {
+  startServer();
+}
