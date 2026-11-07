@@ -4,6 +4,17 @@ import { calculateBogoReward, barberCanFulfillBogo, findBogoServiceOverlap, norm
 import { hasActiveNewCustomerOfferReservation, hasSuccessfulCompletedBooking, isOfferValueWithinCap, NEW_CUSTOMER_RESERVATION_MINUTES } from "../utils/offerEligibility.js";
 import { isWithinHappyHour } from "../utils/happyHour.js";
 import { calculateOfferDiscount } from "../utils/offerDiscount.js";
+import { jsonIds, parseJson } from "../utils/json.js";
+import { money } from "../utils/money.js";
+import {
+  clockMinutes,
+  localDateKey,
+  localTimeKey,
+  minutesBetween,
+  nowTimeIST,
+  todayIST,
+  weekdayIST,
+} from "../utils/time.js";
 import {
   addNotification,
   findBookings,
@@ -50,27 +61,7 @@ const verifyQuote = (token) => {
   }
 };
 
-const localDateKey = (date = new Date()) => {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  const pick = (type) => parts.find((p) => p.type === type)?.value;
-  return `${pick("year")}-${pick("month")}-${pick("day")}`;
-};
 
-const localTimeKey = (date = new Date()) => {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Kolkata",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(date);
-  const pick = (type) => parts.find((p) => p.type === type)?.value;
-  return `${pick("hour")}:${pick("minute")}`;
-};
 
 function assertAnnualScheduleAllowsBooking(availability, bookingDate) {
   const schedules =
@@ -172,23 +163,10 @@ async function validateSelection(
       { status: 404 },
     );
 
-  const avail =
-    typeof shops[0].availability_json === "string"
-      ? JSON.parse(shops[0].availability_json || "{}")
-      : shops[0].availability_json || {};
+  const avail = parseJson(shops[0].availability_json, {});
   const now = new Date();
-  const istParts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(now);
-  const part = (type) => istParts.find((item) => item.type === type)?.value;
-  const today = `${part("year")}-${part("month")}-${part("day")}`;
-  const currentTime = `${part("hour")}:${part("minute")}`;
+  const today = todayIST(now);
+  const currentTime = nowTimeIST(now);
   const emergencyEnd = avail.temporaryClosure?.endAt
     ? new Date(avail.temporaryClosure.endAt)
     : null;
@@ -199,10 +177,7 @@ async function validateSelection(
       status: 409,
     });
   }
-  const bookingWeekday = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Kolkata",
-    weekday: "short",
-  }).format(new Date(`${bookingDate}T12:00:00Z`));
+  const bookingWeekday = weekdayIST(bookingDate);
   const annual = avail.annualSchedules?.[bookingDate];
   const schedule = avail.schedule?.[bookingWeekday];
   const manualOpenToday = bookingDate === today && avail.isOpen === true;
@@ -389,12 +364,9 @@ async function validateSelection(
     );
     if (nextAppointment.length) {
       const now = localTimeKey();
-      const toMinutes = (value) =>
-        Number(String(value).slice(0, 2)) * 60 +
-        Number(String(value).slice(3, 5));
       if (
         expectedWait + duration >
-        toMinutes(nextAppointment[0].scheduled_time) - toMinutes(now)
+        minutesBetween(now, nextAppointment[0].scheduled_time)
       )
         throw Object.assign(
           new Error(
@@ -414,16 +386,6 @@ async function validateSelection(
   return { shop: shops[0], services, customer: users[0], amount, duration, serviceQuantities };
 }
 
-const jsonIds = (value) => {
-  if (Array.isArray(value)) return value.map(String);
-  try {
-    return JSON.parse(value || "[]").map(String);
-  } catch {
-    return [];
-  }
-};
-const money = (value) =>
-  Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 function normalizeQuantities(raw, serviceIds) {
   const values = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   const quantities = Object.fromEntries(serviceIds.map((id) => [id, Number(values[id] ?? 1)]));
@@ -786,13 +748,7 @@ function requestedBookingDate(value) {
     throw Object.assign(new Error("Select a valid booking date."), {
       status: 400,
     });
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const today = `${parts.find((x) => x.type === "year").value}-${parts.find((x) => x.type === "month").value}-${parts.find((x) => x.type === "day").value}`;
+  const today = todayIST();
   if (date < today)
     throw Object.assign(new Error("Choose today or a future booking date."), {
       status: 400,
@@ -819,34 +775,13 @@ function requestedScheduledTime(value, bookingDate) {
   return time;
 }
 
-function clockMinutes(value, fallback) {
-  const match = String(value || fallback).trim().match(/^(\d{1,2}):(\d{2})/);
-  if (!match) return null;
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  if (
-    !Number.isInteger(hours) ||
-    !Number.isInteger(minutes) ||
-    hours > 23 ||
-    minutes > 59
-  )
-    return null;
-  return hours * 60 + minutes;
-}
-
 async function validateScheduledSlot(
   connection,
   { shop, barberId, bookingDate, scheduledTime, duration },
 ) {
   if (!scheduledTime) return;
-  const availability =
-    typeof shop.availability_json === "string"
-      ? JSON.parse(shop.availability_json || "{}")
-      : shop.availability_json || {};
-  const weekday = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Kolkata",
-    weekday: "short",
-  }).format(new Date(`${bookingDate}T12:00:00Z`));
+  const availability = parseJson(shop.availability_json, {});
+  const weekday = weekdayIST(bookingDate);
   const annual = availability.annualSchedules?.[bookingDate];
   const schedule = availability.schedule?.[weekday];
   const shifts = availability.operationalHours?.enabled
@@ -921,8 +856,10 @@ async function validateQueueDuration(connection, shopId, barberId, bookingDate, 
     [shopId, barberId, bookingDate],
   );
   if (!next.length) return;
-  const toMinutes = (value) => Number(String(value).slice(0, 2)) * 60 + Number(String(value).slice(3, 5));
-  if (Number(active[0]?.minutes || 0) + duration > toMinutes(next[0].scheduled_time) - toMinutes(localTimeKey()))
+  if (
+    Number(active[0]?.minutes || 0) + duration >
+    minutesBetween(localTimeKey(), next[0].scheduled_time)
+  )
     throw Object.assign(new Error("This booking duration would overlap the next scheduled appointment."), { status: 409 });
 }
 

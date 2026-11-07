@@ -1,4 +1,4 @@
-const money = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+import { money } from "./money.js";
 
 export function calculateOfferDiscount({ eligibleSubtotal, baseAmount, discountType, discountValue, maximumDiscount = null }) {
   const subtotal = Math.max(0, Number(eligibleSubtotal) || 0);

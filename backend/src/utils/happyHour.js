@@ -1,20 +1,11 @@
-export const SHOP_TIME_ZONE = "Asia/Kolkata";
-export const WEEKDAY_CODES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+import {
+  SHOP_TIME_ZONE,
+  WEEKDAY_CODES,
+  clockMinutes,
+  weekdayIST as weekdayForDate,
+} from "./time.js";
 
-function clockMinutes(value) {
-  const match = String(value || "").match(/^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?$/);
-  if (!match) return null;
-  const hour = Number(match[1]);
-  if (hour < 0 || hour > 23) return null;
-  return hour * 60 + Number(match[2]);
-}
-
-function weekdayForDate(date) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) return null;
-  const parsed = new Date(`${date}T12:00:00Z`);
-  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) return null;
-  return new Intl.DateTimeFormat("en-US", { timeZone: SHOP_TIME_ZONE, weekday: "short" }).format(parsed);
-}
+export { SHOP_TIME_ZONE, WEEKDAY_CODES };
 
 function currentLocalParts(now) {
   const parts = new Intl.DateTimeFormat("en-CA", {

@@ -1,4 +1,8 @@
 import { pool } from "../config/db.js";
+import {
+  scheduledQueueDate,
+  minutesUntilAppointment,
+} from "../utils/time.js";
 
 const ACTIVE_QUEUE_STATUSES = ["Waiting", "Your Turn", "In Service"];
 const EXCLUDED_STATUSES = [
@@ -8,18 +12,7 @@ const EXCLUDED_STATUSES = [
   "Emergency Closed",
 ];
 
-export const scheduledQueueDate = (date = new Date()) =>
-  new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(date);
-
-export function minutesUntilAppointment(date, time, now = new Date()) {
-  const appointment = new Date(`${date}T${String(time).slice(0, 8)}+05:30`);
-  return Math.floor((appointment.getTime() - now.getTime()) / 60000);
-}
+export { scheduledQueueDate, minutesUntilAppointment };
 
 export function shouldInsertScheduledBooking({
   remainingQueueMinutes,

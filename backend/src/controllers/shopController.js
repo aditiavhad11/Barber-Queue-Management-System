@@ -16,42 +16,12 @@ import {
   normalizePhone,
 } from "../utils/validators.js";
 
+import { parseJson } from "../utils/json.js";
+import { localDateKey, isValidDateKey } from "../utils/time.js";
+
 /* ------------------------------------------------------------------ */
 /* Small helpers                                                       */
 /* ------------------------------------------------------------------ */
-
-const parseJson = (value, fallback = {}) => {
-  if (!value) return fallback;
-  if (typeof value === "object") return value;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return fallback;
-  }
-};
-
-const IST_DATE_FORMAT = new Intl.DateTimeFormat("en-CA", {
-  timeZone: "Asia/Kolkata",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
-
-const localDateKey = (date = new Date()) => {
-  const parts = IST_DATE_FORMAT.formatToParts(date);
-  const pick = (type) => parts.find((p) => p.type === type)?.value;
-  return `${pick("year")}-${pick("month")}-${pick("day")}`;
-};
-
-/** True only for a real calendar date in YYYY-MM-DD form. */
-const isValidDateKey = (date) => {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
-  const parsed = new Date(`${date}T00:00:00Z`);
-  return (
-    !Number.isNaN(parsed.getTime()) &&
-    parsed.toISOString().slice(0, 10) === date
-  );
-};
 
 const notOwned = (res) =>
   res
