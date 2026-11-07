@@ -146,3 +146,4 @@ export async function acceptBookingCore(connection, booking, overrideToken = "")
 
   return { token, accepted: true };
 }
+
