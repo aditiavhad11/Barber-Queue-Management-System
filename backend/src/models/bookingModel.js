@@ -1,14 +1,8 @@
 import { pool } from "../config/db.js";
+import { parseJson } from "../utils/json.js";
+import { todayIST } from "../utils/time.js";
 
-const parse = (value, fallback) => {
-  if (value == null) return fallback;
-  if (typeof value === "object") return value;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return fallback;
-  }
-};
+const parse = parseJson;
 const iso = (value) => (value ? new Date(value).toISOString() : null);
 
 export const rupees = (amount) =>
@@ -70,9 +64,9 @@ export async function hydrateBookings(rows) {
       customerId: row.customer_id,
       bookingDate: row.booking_date_string || iso(row.created_at)?.slice(0, 10),
       scheduledTime: row.scheduled_time ? String(row.scheduled_time).slice(0, 5) : null,
-      isSameDayScheduled: Boolean(row.scheduled_time && row.booking_date_string === new Intl.DateTimeFormat("en-CA", {
-        timeZone: "Asia/Kolkata",
-      }).format(new Date())),
+      isSameDayScheduled: Boolean(
+        row.scheduled_time && row.booking_date_string === todayIST(),
+      ),
       customerName: row.customer_name || "",
       serviceIds,
       services: serviceIds
@@ -118,9 +112,7 @@ export async function hydrateBookings(rows) {
       isPrebooking:
         row.status === "accepted" &&
         row.booking_date_string &&
-        row.booking_date_string !== new Intl.DateTimeFormat("en-CA", {
-          timeZone: "Asia/Kolkata",
-        }).format(new Date()),
+        row.booking_date_string !== todayIST(),
       skippedAt: iso(row.skipped_at),
       skipCount: Number(row.skip_count || 0),
       completedAt: iso(row.completed_at),

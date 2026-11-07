@@ -9,19 +9,14 @@ import {
 import {
   recalculateScheduledBookings,
   requestScheduledQueueRecalculation,
-  scheduledQueueDate,
 } from "../services/scheduledQueueService.js";
+import { jsonArray } from "../utils/json.js";
+import { money } from "../utils/money.js";
+import {
+  localDateKey,
+  minutesUntilAppointment,
+} from "../utils/time.js";
 
-const jsonArray = (value) => {
-  if (Array.isArray(value)) return value.map(String);
-  try {
-    return JSON.parse(value || "[]").map(String);
-  } catch {
-    return [];
-  }
-};
-const money = (value) =>
-  Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 const SERVICE_EDIT_QUEUE_STATUSES = ["Waiting", "Your Turn"];
 
 function mapServiceEdit(row, serviceMap = new Map()) {
@@ -624,9 +619,6 @@ const scope = (req) =>
     ? { sql: "s.id=?", params: [req.user.shopId || req.user.sub] }
     : { sql: "s.owner_id=?", params: [req.user.sub] };
 
-const localDateKey = (date = new Date()) =>
-  scheduledQueueDate(date);
-
 export async function listMine(req, res) {
   const rows = await findBookings(
     "b.customer_id=? AND b.status IN ('payment_submitted','accepted','rejected')",
@@ -791,11 +783,10 @@ export async function acceptBooking(req, res) {
         const walkInWorkload =
           Number(ahead[0].minutes || 0) + Number(booking.durationMinutes || 0);
         const blockingAppointment = scheduled.find((appointment) => {
-          const appointmentAt = new Date(
-            `${booking.bookingDate}T${String(appointment.scheduled_time).slice(0, 8)}+05:30`,
-          );
-          const available = Math.floor(
-            (appointmentAt.getTime() - now.getTime()) / 60000,
+          const available = minutesUntilAppointment(
+            booking.bookingDate,
+            appointment.scheduled_time,
+            now,
           );
           return (
             walkInWorkload + Number(appointment.duration_minutes || 0) >

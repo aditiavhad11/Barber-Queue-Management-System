@@ -3,17 +3,11 @@ import { pool } from "../config/db.js";
 import { findBogoServiceOverlap } from "../utils/bogoOffer.js";
 import { effectiveOfferStatus, hasActiveNewCustomerOfferReservation, hasSuccessfulCompletedBooking, NEW_CUSTOMER_RESERVATION_MINUTES } from "../utils/offerEligibility.js";
 import { WEEKDAY_CODES } from "../utils/happyHour.js";
+import { parseIds, parseObject } from "../utils/json.js";
+import { money } from "../utils/money.js";
 
-const parseIds = (value) => {
-  if (Array.isArray(value)) return value.map(String);
-  try { return JSON.parse(value || "[]").map(String); } catch { return []; }
-};
-const parseObject = (value) => {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value;
-  try { const parsed = JSON.parse(value || "{}"); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}; } catch { return {}; }
-};
 const bool = (value) => value === true || value === 1 || value === "1";
-const roundMoney = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+const roundMoney = money;
 
 function mapScheme(row) {
   return {
