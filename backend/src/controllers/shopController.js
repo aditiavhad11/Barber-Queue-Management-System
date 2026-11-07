@@ -236,7 +236,7 @@ async function hydrateShops(shopRows) {
   if (!shopRows.length) return [];
   const shopIds = shopRows.map((r) => r.id);
 
-  const [[photoRows], [serviceRows], [barberRows], coOwnerRows, reviewRows] =
+  const [[photoRows], [serviceRows], [barberRows], coOwnerRows, reviewRows, closureRows] =
     await Promise.all([
       pool.query(
         "SELECT id,shop_id,url,is_primary FROM shop_photos WHERE shop_id IN (?) ORDER BY is_primary DESC, created_at ASC",
@@ -266,7 +266,16 @@ async function hydrateShops(shopRows) {
           [shopIds],
         )
         .then(([rows]) => rows)
-        // table is created on server start; ignore if it is not there yet
+        .catch(() => []),
+      pool
+        .query(
+          `SELECT id, shop_id, closure_type, start_at, end_at, reason
+           FROM emergency_closures
+           WHERE shop_id IN (?) AND status='active' AND (end_at IS NULL OR end_at > NOW())
+           ORDER BY start_at DESC`,
+          [shopIds],
+        )
+        .then(([rows]) => rows)
         .catch(() => []),
     ]);
 
@@ -289,6 +298,7 @@ async function hydrateShops(shopRows) {
   const barbersByShop = groupBy(barberRows, "shop_id");
   const coOwnersByShop = groupBy(coOwnerRows, "shop_id");
   const reviewsByShop = groupBy(reviewRows, "shop_id");
+  const closuresByShop = groupBy(closureRows, "shop_id");
 
   return shopRows.map((row) => ({
     ...row,
@@ -323,14 +333,48 @@ async function hydrateShops(shopRows) {
             confirmed: true,
           },
     availability: (() => {
-      const availability = parseJson(row.availability_json);
-      const end = availability.temporaryClosure?.endAt;
+      const availability = parseJson(row.availability_json, {});
+      const activeClosures = closuresByShop.get(row.id) || [];
+      const now = new Date();
+      // Derive active temporary closure from emergency_closures table
+      const currentClosure =
+        activeClosures.find((c) => {
+          const start = new Date(c.start_at);
+          const end = c.end_at ? new Date(c.end_at) : null;
+          return start <= now && (!end || end > now);
+        }) || activeClosures[0];
+
       if (
-        availability.emergencyClosed &&
-        end &&
-        new Date(end) <= new Date()
+        currentClosure &&
+        new Date(currentClosure.start_at) <= now &&
+        (!currentClosure.end_at || new Date(currentClosure.end_at) > now)
       ) {
-        availability.isOpen = true;
+        availability.emergencyClosed = true;
+        availability.isOpen = false;
+        availability.temporaryClosure = {
+          id: currentClosure.id,
+          active: true,
+          type: currentClosure.closure_type,
+          startAt: new Date(currentClosure.start_at).toISOString(),
+          endAt: currentClosure.end_at
+            ? new Date(currentClosure.end_at).toISOString()
+            : null,
+          reason: currentClosure.reason || "",
+        };
+      } else {
+        availability.emergencyClosed = false;
+        availability.temporaryClosure = currentClosure
+          ? {
+              id: currentClosure.id,
+              active: true,
+              type: currentClosure.closure_type,
+              startAt: new Date(currentClosure.start_at).toISOString(),
+              endAt: currentClosure.end_at
+                ? new Date(currentClosure.end_at).toISOString()
+                : null,
+              reason: currentClosure.reason || "",
+            }
+          : null;
       }
       return availability;
     })(),
@@ -713,13 +757,17 @@ export async function updateShop(req, res) {
     if (annualError) return res.status(400).json({ message: annualError });
     const shiftError = validateShifts(b.availability || {});
     if (shiftError) return res.status(400).json({ message: shiftError });
-    add("availability_json", JSON.stringify(nextAvailability));
+    const { temporaryClosure, emergencyClosed, ...cleanAvailability } =
+      nextAvailability;
+    add("availability_json", JSON.stringify(cleanAvailability));
   }
 
   if (b.isOpen !== undefined && b.availability === undefined) {
+    const { temporaryClosure, emergencyClosed, ...cleanCurrent } =
+      currentAvailability;
     add(
       "availability_json",
-      JSON.stringify({ ...currentAvailability, isOpen: Boolean(b.isOpen) }),
+      JSON.stringify({ ...cleanCurrent, isOpen: Boolean(b.isOpen) }),
     );
   }
 
@@ -906,41 +954,13 @@ export async function listEmergencyClosures(req, res) {
 }
 
 export async function endEmergencyClosure(req, res) {
-  if (!(await ownsShop(req, req.params.id))) return notOwned(res);
+  if (!(await ownsShop(req, req.params.id))) notOwned();
   const [result] = await pool.query(
     "UPDATE emergency_closures SET status='ended', ended_at=NOW() WHERE id=? AND shop_id=? AND status='active'",
     [req.params.closureId, req.params.id],
   );
   if (!result.affectedRows)
-    return res.status(404).json({ message: "Active emergency closure not found." });
-  const [[other]] = await pool.query(
-    `SELECT id FROM emergency_closures
-     WHERE shop_id=? AND status='active' AND id<>?
-       AND start_at<=NOW() AND (end_at IS NULL OR end_at>NOW())
-     LIMIT 1`,
-    [req.params.id, req.params.closureId],
-  );
-  const [[shopRow]] = await pool.query(
-    "SELECT availability_json FROM shops WHERE id=? AND owner_id=? LIMIT 1",
-    [req.params.id, req.user.sub],
-  );
-  const availability = parseJson(shopRow?.availability_json, {});
-  availability.temporaryClosure = other
-    ? {
-        id: other.id,
-        active: true,
-        type: other.closure_type,
-        startAt: new Date(other.start_at).toISOString(),
-        endAt: other.end_at ? new Date(other.end_at).toISOString() : null,
-        reason: other.reason || "",
-      }
-    : null;
-  availability.isOpen = Boolean(!other);
-  availability.emergencyClosed = Boolean(other);
-  await pool.query(
-    "UPDATE shops SET availability_json=? WHERE id=? AND owner_id=?",
-    [JSON.stringify(availability), req.params.id, req.user.sub],
-  );
+    throw AppError.notFound("Active emergency closure not found.", "CLOSURE_NOT_FOUND");
   res.json({ ok: true });
 }
 

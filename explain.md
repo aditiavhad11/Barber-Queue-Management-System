@@ -50,12 +50,14 @@ A multi-role web app that replaces physical waiting lines at barbershops. Custom
 
 ```
 backend/src/
-  server.js              Express app, CORS, route mounting, error handler
-  config/                db.js (MySQL pool), mail.js, ensureSchema.js (auto-adds columns/tables at startup)
-  middleware/auth.js     JWT auth + role guard
-  routes/                auth, shops, bookings, reviews, notifications, admin
-  controllers/           business logic per domain (shop, booking, payment, review, notification, auth)
+  server.js              Express app, CORS, route mounting, central error handler
+  config/                db.js (MySQL pool), mail.js, migrate.js (runs numbered SQL migrations at startup or via `npm run migrate`)
+  middleware/            auth.js (JWT + role guards), validate.js (Zod request validator), errorHandler.js (unified error responses)
+  routes/                auth, shops, bookings, reviews, notifications, admin, schemes, complaints, uploads
+  controllers/           business logic per domain (shop, booking, payment, review, notification, auth, scheme, complaint)
   models/                authModel.js, bookingModel.js
+  schemas/               Zod validation schemas
+  utils/                 time.js, json.js, money.js, AppError.js, validators.js
 frontend/src/
   App.jsx                All routes, grouped by role layout
   layouts/               Public, Customer, Owner, Shop, Admin
@@ -65,8 +67,8 @@ frontend/src/
   services/              api.js (Axios), upload.js (Cloudinary)
   utils/                 eta, time, location, closedDays, relativeTime
 database/
-  schema.sql             Full schema
-  migrations/            password auth, UPI QR payment, queue reviews
+  schema.sql             Full consolidated schema
+  migrations/            Numbered migrations (001_initial_schema.sql, 002_schemes_and_features.sql)
 ```
 
 ## API Overview (`/api`)
@@ -74,16 +76,21 @@ database/
 | Prefix | Purpose |
 |---|---|
 | `/auth` | request-otp, verify-otp, login-password, shop-login, user listing (admin) |
-| `/shops` | CRUD for shops, services, barbers; admin status change; resubmit after rejection |
-| `/bookings` | payment-quote, payment-submit, mine, pending, queue, accept/reject, UPI settings |
+| `/shops` | CRUD for shops, services, barbers; admin status change; emergency closures; resubmit |
+| `/bookings` | payment-quote, payment-submit, mine, pending, queue, accept/reject, UPI settings, service-edits |
+| `/schemes` | CRUD for shop promotional offers, BOGO schemes, happy hours |
 | `/reviews` | create review (customer), list approved |
+| `/complaints` | customer complaints, staff routing, owner/admin resolution |
 | `/notifications` | contact customer, booking notifications |
 | `/admin` | admin listings (shops, etc.) |
 | `/health` | DB healthcheck |
 
 ## Database (MySQL, `barber_queue`)
 
-Main tables: `users`, `otp_codes`, `shops`, `shop_photos`, `services`, `barbers`, `barber_services`, `customers`, `queue_entries`, `payments`, `refunds`, `reviews`, `booking_reviews`, `complaints`, `notifications`, `audit_logs`, `payment_bookings`.
+- **Primary Active Tables:** `users`, `otp_codes`, `shops`, `shop_photos`, `services`, `barbers`, `barber_services`, `customers`, `payment_bookings`, `schemes`, `booking_reviews`, `shop_co_owners`, `service_unavailability`, `booking_service_edits`, `emergency_closures`, `emergency_closure_notifications`, `complaints`, `notifications`, `audit_logs`, `schema_migrations`.
+- **Single Source of Truth for Emergency Closures:** The `emergency_closures` table is the authoritative state for all shop closures; shop availability derives active closure status directly from this table.
+- **Deprecated Legacy Tables:** `queue_entries`, `payments`, `refunds`, `reviews` (replaced by unified `payment_bookings` and `booking_reviews`).
+- **Migrations:** Automated via `npm run migrate` in `backend` using numbered SQL files in `database/migrations/`.
 
 Queue ticket statuses: `waiting`, `your_turn`, `in_service`, `completed`, `skipped`, `no_show`, `cancelled`.
 

@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { healthcheck } from "./config/db.js";
-import { ensureSchema } from "./config/ensureSchema.js";
+import { runMigrations } from "./config/migrate.js";
 import authRoutes from "./routes/authRoutes.js";
 import shopRoutes from "./routes/shopRoutes.js";
 import reviewRoutes from "./routes/reviewRoutes.js";
@@ -70,9 +70,9 @@ app.use("/api/schemes", schemeRoutes);
 
 app.use(errorHandler);
 
-ensureSchema()
+runMigrations()
   .then(() => startScheduledQueueWorker())
-  .catch((e) => console.error("Schema check failed:", e.message));
+  .catch((e) => console.error("Database migration failed:", e.message));
 
 app.listen(Number(process.env.PORT || 4000), () =>
   console.log(
