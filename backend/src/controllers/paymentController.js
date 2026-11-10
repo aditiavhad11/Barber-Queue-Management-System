@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import { pool } from "../config/db.js";
 import { evaluateScheme } from "../services/schemeService.js";
+import {
+  QUEUE_ERRORS,
+  validateQueueCapacity,
+} from "../services/queueCapacityService.js";
+import { recordBookingTransition } from "../services/bookingStateMachine.js";
 import { jsonIds, parseJson } from "../utils/json.js";
 import { money } from "../utils/money.js";
 import { AppError } from "../utils/AppError.js";
@@ -369,49 +374,6 @@ async function validateSelection(
     throw Object.assign(new Error("A valid payment amount is required."), {
       status: 400,
     });
-  if (!scheduledTime && bookingDate === localDateKey()) {
-    const limit = Number(barbers[0].queue_limit || 0);
-    const [active] = await connection.query(
-      `SELECT COUNT(*) AS total, COALESCE(SUM(duration_minutes),0) AS minutes
-       FROM payment_bookings
-       WHERE shop_id=? AND barber_id=? AND status='accepted'
-         AND queue_status IN ('Waiting','Your Turn','In Service')`,
-      [shopId, barberId],
-    );
-    const expectedWait = Number(active[0].minutes || 0);
-    if (Number(active[0].total || 0) >= limit)
-      throw Object.assign(
-        new Error(
-          `Cannot take in queue till for next ${expectedWait} minutes, as queue is full.`,
-        ),
-        { status: 409 },
-      );
-    const [nextAppointment] = await connection.query(
-      `SELECT scheduled_time FROM payment_bookings
-       WHERE shop_id=? AND barber_id=? AND booking_date=? AND scheduled_time IS NOT NULL
-         AND (
-           status IN ('payment_submitted','accepted')
-           AND COALESCE(queue_status, '') NOT IN
-             ('Cancelled','Completed','No Show')
-         )
-         AND scheduled_time > TIME(NOW())
-       ORDER BY scheduled_time ASC LIMIT 1`,
-      [shopId, barberId, bookingDate],
-    );
-    if (nextAppointment.length) {
-      const now = localTimeKey();
-      if (
-        expectedWait + duration >
-        minutesBetween(now, nextAppointment[0].scheduled_time)
-      )
-        throw Object.assign(
-          new Error(
-            `Cannot take in queue till for next ${expectedWait} minutes, as queue is full.`,
-          ),
-          { status: 409 },
-        );
-    }
-  }
   await validateScheduledSlot(connection, {
     shop: shops[0],
     barberId,
@@ -532,9 +494,9 @@ async function validateScheduledSlot(
     [shop.id, barberId, bookingDate, scheduledTime, duration, scheduledTime],
   );
   if (conflicts.length)
-    throw Object.assign(
-      new Error("That time overlaps another scheduled appointment."),
-      { status: 409 },
+    throw AppError.conflict(
+      QUEUE_ERRORS.APPOINTMENT_OVERLAP.message,
+      QUEUE_ERRORS.APPOINTMENT_OVERLAP.code,
     );
 }
 
@@ -550,7 +512,8 @@ async function validateQueueDuration(connection, shopId, barberId, bookingDate, 
     `SELECT scheduled_time FROM payment_bookings WHERE shop_id=? AND barber_id=? AND booking_date=?
        AND scheduled_time IS NOT NULL AND status IN ('payment_submitted','accepted')
        AND COALESCE(queue_status,'') NOT IN ('Cancelled','Completed','No Show')
-       AND scheduled_time > TIME(NOW()) ORDER BY scheduled_time LIMIT 1`,
+       AND scheduled_time > TIME(CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30'))
+     ORDER BY scheduled_time LIMIT 1`,
     [shopId, barberId, bookingDate],
   );
   if (!next.length) return;
@@ -558,7 +521,10 @@ async function validateQueueDuration(connection, shopId, barberId, bookingDate, 
     Number(active[0]?.minutes || 0) + duration >
     minutesBetween(localTimeKey(), next[0].scheduled_time)
   )
-    throw Object.assign(new Error("This booking duration would overlap the next scheduled appointment."), { status: 409 });
+    throw AppError.conflict(
+      QUEUE_ERRORS.APPOINTMENT_OVERLAP.message,
+      QUEUE_ERRORS.APPOINTMENT_OVERLAP.code,
+    );
 }
 
 async function chooseAmount(connection, shopId, baseAmount) {
@@ -576,14 +542,30 @@ async function chooseAmount(connection, shopId, baseAmount) {
   return amount;
 }
 
-async function expireStalePending(connection, customerId, beneficiaryKey) {
-  await connection.query(
-    `UPDATE payment_bookings
-     SET status='cancelled', decline_reason='Confirmation window expired'
+async function expireStalePending(connection, customerId, beneficiaryKey, actor) {
+  const [expired] = await connection.query(
+    `SELECT id,status,queue_status FROM payment_bookings
      WHERE customer_id=? AND beneficiary_key=? AND status='payment_submitted'
-       AND created_at <= (NOW() - INTERVAL ${NEW_CUSTOMER_RESERVATION_MINUTES} MINUTE)`,
+       AND created_at <= (NOW() - INTERVAL ${NEW_CUSTOMER_RESERVATION_MINUTES} MINUTE)
+     FOR UPDATE`,
     [customerId, beneficiaryKey],
   );
+  for (const booking of expired) {
+    await recordBookingTransition(connection, {
+      bookingId: booking.id,
+      toBookingStatus: "cancelled",
+      actorId: actor?.sub,
+      actorRole: actor?.role || "system",
+      action: "payment_reservation_expired",
+      current: booking,
+    });
+    await connection.query(
+      `UPDATE payment_bookings
+       SET status='cancelled', decline_reason='Confirmation window expired'
+       WHERE id=? AND status='payment_submitted'`,
+      [booking.id],
+    );
+  }
 }
 
 function responsePayload(booking, shop, services) {
@@ -639,7 +621,14 @@ export async function paymentQuote(req, res) {
     const who = beneficiaryFrom(req.body, customer);
     if (who.error) return res.status(400).json({ message: who.error });
 
-    await expireStalePending(connection, customerId, who.key);
+    await connection.beginTransaction();
+    try {
+      await expireStalePending(connection, customerId, who.key, req.user);
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback().catch(() => {});
+      throw error;
+    }
 
     const [pending] = await connection.query(
       "SELECT id FROM payment_bookings WHERE customer_id=? AND beneficiary_key=? AND status='payment_submitted' LIMIT 1",
@@ -678,6 +667,12 @@ export async function paymentQuote(req, res) {
     if (applied.duration) {
       await validateScheduledSlot(connection, { shop, barberId, bookingDate, scheduledTime, duration: applied.duration });
       if (!scheduledTime) await validateQueueDuration(connection, shopId, barberId, bookingDate, applied.duration);
+      await validateQueueCapacity(connection, {
+        shopId,
+        barberId,
+        bookingDate,
+        lock: false,
+      });
     }
     const finalAmount = applied.scheme?.offerType === "bogo" ? applied.discountedSubtotal : await chooseAmount(connection, shopId, applied.discountedSubtotal);
     const quotePayload = {
@@ -774,7 +769,7 @@ export async function submitPayment(req, res) {
     const who = beneficiaryFrom(req.body, customer);
     if (who.error) throw Object.assign(new Error(who.error), { status: 400 });
 
-    await expireStalePending(connection, customerId, who.key);
+    await expireStalePending(connection, customerId, who.key, req.user);
 
     const [pending] = await connection.query(
       "SELECT id FROM payment_bookings WHERE customer_id=? AND beneficiary_key=? AND status='payment_submitted' LIMIT 1",
@@ -835,6 +830,12 @@ export async function submitPayment(req, res) {
     if (applied.duration) {
       await validateScheduledSlot(connection, { shop, barberId, bookingDate, scheduledTime, duration: applied.duration });
       if (!scheduledTime) await validateQueueDuration(connection, shopId, barberId, bookingDate, applied.duration);
+      await validateQueueCapacity(connection, {
+        shopId,
+        barberId,
+        bookingDate,
+        lock: true,
+      });
     }
     if (
       money(applied.originalAmount) !== money(quote.originalAmount) ||
@@ -920,6 +921,15 @@ export async function submitPayment(req, res) {
           .slice(0, 120) || customer.name,
       ],
     );
+    await recordBookingTransition(connection, {
+      bookingId,
+      toBookingStatus: "payment_submitted",
+      actorId: customerId,
+      actorRole: "customer",
+      action: "payment_submitted",
+      metadata: { shopId, barberId, amount: finalAmount, bookingDate, scheduledTime },
+      current: { status: null, queue_status: null },
+    });
 
     await connection.commit();
 

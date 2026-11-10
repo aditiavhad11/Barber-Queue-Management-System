@@ -1,4 +1,5 @@
 import { pool } from "../config/db.js";
+import { permissionGranted } from "../middleware/auth.js";
 import crypto from "node:crypto";
 import {
   addNotification,
@@ -10,7 +11,10 @@ import {
   recalculateScheduledBookings,
   requestScheduledQueueRecalculation,
 } from "../services/scheduledQueueService.js";
-import { acceptBookingCore } from "../services/bookingAcceptService.js";
+import { executeBookingAcceptance } from "../services/bookingAcceptService.js";
+import { validateQueueCapacity } from "../services/queueCapacityService.js";
+import { writeAuditLog } from "../services/auditLogService.js";
+import { recordBookingTransition } from "../services/bookingStateMachine.js";
 import { jsonArray } from "../utils/json.js";
 import { money } from "../utils/money.js";
 import {
@@ -20,6 +24,89 @@ import {
 import { AppError } from "../utils/AppError.js";
 
 const SERVICE_EDIT_QUEUE_STATUSES = ["Waiting", "Your Turn"];
+const ACTIVE_QUEUE_STATUSES = new Set([
+  "Waiting",
+  "Your Turn",
+  "In Service",
+  "Scheduled",
+]);
+
+async function setQueueStatusWithCapacity(
+  booking,
+  nextStatus,
+  updateSql,
+  updateParams,
+  actor,
+  action = "queue_status_changed",
+) {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.query(
+      "SELECT id FROM barbers WHERE id=? AND shop_id=? FOR UPDATE",
+      [booking.barberId, booking.shopId],
+    );
+    const [currentRows] = await connection.query(
+      "SELECT status,queue_status FROM payment_bookings WHERE id=? FOR UPDATE",
+      [booking.id],
+    );
+    const current = currentRows[0];
+    if (!current) throw AppError.notFound("Booking not found.", "BOOKING_NOT_FOUND");
+    if (
+      ACTIVE_QUEUE_STATUSES.has(nextStatus) &&
+      !ACTIVE_QUEUE_STATUSES.has(current.queue_status || "")
+    ) {
+      await validateQueueCapacity(connection, {
+        shopId: booking.shopId,
+        barberId: booking.barberId,
+        bookingDate: booking.bookingDate,
+        excludeBookingId: booking.id,
+        lock: false,
+      });
+    }
+    await recordBookingTransition(connection, {
+      bookingId: booking.id,
+      toQueueStatus: nextStatus,
+      actorId: actor?.sub,
+      actorRole: actor?.role || "system",
+      action,
+      current,
+    });
+    if (action === "queue_entry_skipped") {
+      await writeAuditLog(connection, {
+        actorId: actor?.sub,
+        actorRole: actor?.role || "system",
+        action,
+        entityType: "payment_booking",
+        entityId: booking.id,
+        metadata: {
+          queueStatus: current.queue_status || "Waiting",
+          skipCount: Number(booking.skipCount || 0) + 1,
+        },
+      });
+    }
+    if (action === "emergency_closure_refund_completed") {
+      await writeAuditLog(connection, {
+        actorId: actor?.sub,
+        actorRole: actor?.role || "system",
+        action,
+        entityType: "payment_booking",
+        entityId: booking.id,
+        metadata: {
+          previousRefundStatus: booking.refundStatus,
+          refundStatus: "completed",
+        },
+      });
+    }
+    await connection.query(updateSql, updateParams);
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
 
 function mapServiceEdit(row, serviceMap = new Map()) {
   const oldIds = jsonArray(row.old_service_ids_json);
@@ -179,7 +266,7 @@ export async function requestServiceEdit(req, res) {
   try {
     await connection.beginTransaction();
     const [bookings] = await connection.query(
-      `SELECT b.*,DATE_FORMAT(COALESCE(b.booking_date,DATE(b.accepted_at),DATE(b.created_at)),'%Y-%m-%d') AS edit_booking_date,
+      `SELECT b.*,DATE_FORMAT(COALESCE(b.booking_date,DATE(CONVERT_TZ(b.accepted_at,'+00:00','+05:30')),DATE(CONVERT_TZ(b.created_at,'+00:00','+05:30'))),'%Y-%m-%d') AS edit_booking_date,
               s.name AS shop_name,s.upi_qr_url,s.status AS shop_status,s.active AS shop_active,s.availability_json
        FROM payment_bookings b JOIN shops s ON s.id=b.shop_id
        WHERE b.id=? AND b.customer_id=? LIMIT 1 FOR UPDATE`,
@@ -439,7 +526,7 @@ export async function resolveServiceEdit(req, res) {
     const [rows] = await connection.query(
       `SELECT e.*,b.queue_id,b.token,b.status AS booking_status,b.queue_status,b.amount,
               b.service_ids_json,b.shop_id AS current_shop_id,b.barber_id AS current_barber_id,
-              DATE_FORMAT(COALESCE(b.booking_date,DATE(b.accepted_at),DATE(b.created_at)),'%Y-%m-%d') AS edit_booking_date,
+              DATE_FORMAT(COALESCE(b.booking_date,DATE(CONVERT_TZ(b.accepted_at,'+00:00','+05:30')),DATE(CONVERT_TZ(b.created_at,'+00:00','+05:30'))),'%Y-%m-%d') AS edit_booking_date,
               s.name AS shop_name,s.upi_qr_url,s.availability_json,u.name AS customer_name,bar.name AS barber_name
        FROM booking_service_edits e JOIN payment_bookings b ON b.id=e.booking_id
        JOIN shops s ON s.id=e.shop_id JOIN users u ON u.id=e.customer_id JOIN barbers bar ON bar.id=e.barber_id
@@ -481,6 +568,19 @@ export async function resolveServiceEdit(req, res) {
           edit.id,
         ],
       );
+      await writeAuditLog(connection, {
+        actorId: req.user.sub,
+        actorRole: req.user.role,
+        action: "service_edit_rejected",
+        entityType: "booking_service_edit",
+        entityId: edit.id,
+        metadata: {
+          bookingId: edit.booking_id,
+          paymentStatus: edit.payment_status,
+          refundStatus: edit.refund_status,
+          note: String(req.body?.note || "").trim().slice(0, 255),
+        },
+      });
       await connection.query(
         "INSERT INTO notifications(id,user_id,shop_id,tone,text,ref_id) VALUES (?,?,?,?,?,?)",
         [
@@ -572,6 +672,20 @@ export async function resolveServiceEdit(req, res) {
       `UPDATE booking_service_edits SET status='applied',${paymentUpdate},resolution_note=?,resolved_by=?,resolved_by_role=?,resolved_at=NOW() WHERE id=?`,
       [resolutionNote, req.user.sub, req.user.role, edit.id],
     );
+    await writeAuditLog(connection, {
+      actorId: req.user.sub,
+      actorRole: req.user.role,
+      action: action === "confirm_refund" ? "service_edit_refund_confirmed" : "service_edit_payment_verified",
+      entityType: "booking_service_edit",
+      entityId: edit.id,
+      metadata: {
+        bookingId: edit.booking_id,
+        previousStatus: edit.status,
+        paymentStatus: action === "confirm_payment" ? "verified" : edit.payment_status,
+        refundStatus: action === "confirm_refund" ? "shop_confirmed" : edit.refund_status,
+        amountDelta: Number(edit.amount_delta),
+      },
+    });
     await connection.query(
       "INSERT INTO notifications(id,user_id,shop_id,tone,text,ref_id) VALUES (?,?,?,?,?,?)",
       [
@@ -725,17 +839,13 @@ export async function acceptBooking(req, res) {
   }
 
   const connection = await pool.getConnection();
-  let result;
-  try {
-    await connection.beginTransaction();
-    result = await acceptBookingCore(connection, booking, req.body?.token);
-    await connection.commit();
-  } catch (error) {
-    await connection.rollback().catch(() => {});
-    connection.release();
-    throw error;
-  }
-  connection.release();
+  const result = await executeBookingAcceptance(
+    connection,
+    booking,
+    req.body?.token,
+    undefined,
+    req.user,
+  );
 
   // affectedRows === 0 means concurrent handler already processed this booking
   if (!result.accepted) {
@@ -788,9 +898,13 @@ export async function takePrebooking(req, res) {
     return res
       .status(409)
       .json({ message: "Only today's prebookings can be added to the queue." });
-  await pool.query(
+  await setQueueStatusWithCapacity(
+    booking,
+    "Waiting",
     "UPDATE payment_bookings SET queue_status='Waiting', skipped_at=NOW() WHERE id=? AND status='accepted' AND queue_status='Prebooked'",
     [booking.id],
+    req.user,
+    "prebooking_added_to_queue",
   );
   requestScheduledQueueRecalculation({
     shopId: booking.shopId,
@@ -827,12 +941,35 @@ export async function declineBooking(req, res) {
     String(req.body?.reason || "")
       .trim()
       .slice(0, 200) || "Payment not received";
-  const [result] = await pool.query(
-    `UPDATE payment_bookings
-     SET status='rejected', decline_reason=?, declined_until=DATE_ADD(NOW(), INTERVAL 30 MINUTE)
-     WHERE id=? AND status='payment_submitted'`,
-    [reason, booking.id],
-  );
+  const connection = await pool.getConnection();
+  let result;
+  try {
+    await connection.beginTransaction();
+    const currentState = await recordBookingTransition(connection, {
+      bookingId: booking.id,
+      toBookingStatus: "rejected",
+      actorId: req.user.sub,
+      actorRole: req.user.role,
+      action: "booking_payment_declined",
+      metadata: { reason },
+    });
+    if (currentState.status === "payment_submitted") {
+      [result] = await connection.query(
+        `UPDATE payment_bookings
+         SET status='rejected', decline_reason=?, declined_until=DATE_ADD(NOW(), INTERVAL 30 MINUTE)
+         WHERE id=? AND status='payment_submitted'`,
+        [reason, booking.id],
+      );
+    } else {
+      result = { affectedRows: 0 };
+    }
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    throw error;
+  } finally {
+    connection.release();
+  }
 
   if (!result.affectedRows) {
     const [again] = await hydrateBookings(
@@ -888,7 +1025,9 @@ export async function deleteBookingHistory(req, res) {
   try {
     await connection.beginTransaction();
     const [rows] = await connection.query(
-      `SELECT b.id,b.queue_id,b.queue_status FROM payment_bookings b JOIN shops s ON s.id=b.shop_id WHERE b.id=? AND ${sql} LIMIT 1`,
+      `SELECT b.id,b.queue_id,b.status,b.queue_status,b.amount,b.refund_status,b.deleted_at
+       FROM payment_bookings b JOIN shops s ON s.id=b.shop_id
+       WHERE b.id=? AND b.deleted_at IS NULL AND ${sql} LIMIT 1 FOR UPDATE`,
       [req.params.id, ...params],
     );
     if (!rows.length)
@@ -902,13 +1041,26 @@ export async function deleteBookingHistory(req, res) {
         "PAYMENT_STATUS_INVALID",
       );
     }
-    if (rows[0].queue_id)
-      await connection.query("DELETE FROM booking_reviews WHERE queue_id=?", [
-        rows[0].queue_id,
-      ]);
-    await connection.query("DELETE FROM payment_bookings WHERE id=?", [
-      rows[0].id,
-    ]);
+    await connection.query(
+      `UPDATE payment_bookings
+       SET deleted_at=NOW(),deleted_by=?,deleted_by_role=?
+       WHERE id=? AND deleted_at IS NULL`,
+      [req.user.sub, req.user.role, rows[0].id],
+    );
+    await writeAuditLog(connection, {
+      actorId: req.user.sub,
+      actorRole: req.user.role,
+      action: "payment_record_soft_deleted",
+      entityType: "payment_booking",
+      entityId: rows[0].id,
+      metadata: {
+        previousStatus: rows[0].status,
+        queueStatus: rows[0].queue_status,
+        refundStatus: rows[0].refund_status,
+        amount: Number(rows[0].amount),
+        queueId: rows[0].queue_id,
+      },
+    });
     await connection.commit();
     res.json({ ok: true, id: rows[0].id });
   } catch (error) {
@@ -935,13 +1087,20 @@ const QUEUE_STATUSES = [
 // Every accepted booking is a queue entry. Owners/shops get their shops' entries, customers their own.
 export async function listQueue(req, res) {
   const isCustomer = req.user.role === "customer";
+  const isCoOwner = req.user.role === "co_owner";
+  const canManageQueue =
+    !isCoOwner || permissionGranted(req.coOwnerPermissions, "manage_queue");
+  const canViewAnalytics =
+    !isCoOwner || permissionGranted(req.coOwnerPermissions, "view_analytics");
   let rows = [];
-  await recalculateScheduledBookings({
-    shopId:
-      isCustomer || req.user.role === "owner"
-        ? null
-        : req.user.shopId || req.user.sub,
-  });
+  if (canManageQueue) {
+    await recalculateScheduledBookings({
+      shopId:
+        isCustomer || req.user.role === "owner"
+          ? null
+          : req.user.shopId || req.user.sub,
+    });
+  }
 
   if (isCustomer) {
     const ownRows = await findBookings(
@@ -1016,6 +1175,11 @@ export async function listQueue(req, res) {
       params,
       "ORDER BY COALESCE(b.skipped_at, b.accepted_at) ASC, b.accepted_at ASC, b.id ASC LIMIT 500",
     );
+    if (isCoOwner && !canViewAnalytics) {
+      rows = rows.filter((row) =>
+        ["Waiting", "Your Turn", "In Service", "Scheduled", "Prebooked"].includes(row.queue_status),
+      );
+    }
   }
 
   res.json(await hydrateBookings(rows));
@@ -1089,17 +1253,55 @@ export async function setQueueStatus(req, res) {
             "This booking is not waiting for an emergency closure decision.",
         });
       const choice = action === "closure_wait" ? "wait" : "refund";
-      await pool.query(
-        `UPDATE payment_bookings
-         SET closure_choice=?, queue_status=?, refund_status=?
-         WHERE id=? AND status='accepted' AND queue_status='Emergency Closed'`,
-        [
-          choice,
-          action === "closure_wait" ? "Emergency Closed" : "Cancelled",
-          action === "closure_refund" ? "requested" : booking.refundStatus,
-          booking.id,
-        ],
-      );
+      if (action === "closure_refund") {
+        await setQueueStatusWithCapacity(
+          booking,
+          "Cancelled",
+          `UPDATE payment_bookings
+           SET closure_choice='refund',queue_status='Cancelled',refund_status='requested'
+           WHERE id=? AND status='accepted' AND queue_status='Emergency Closed'`,
+          [booking.id],
+          req.user,
+          "emergency_closure_refund_requested",
+        );
+      } else {
+        const connection = await pool.getConnection();
+        try {
+          await connection.beginTransaction();
+          const [currentRows] = await connection.query(
+            "SELECT status,queue_status FROM payment_bookings WHERE id=? FOR UPDATE",
+            [booking.id],
+          );
+          if (
+            currentRows[0]?.status !== "accepted" ||
+            currentRows[0]?.queue_status !== "Emergency Closed"
+          ) {
+            throw AppError.conflict(
+              "This booking is not waiting for an emergency closure decision.",
+              "INVALID_QUEUE_TRANSITION",
+            );
+          }
+          await writeAuditLog(connection, {
+            actorId: req.user.sub,
+            actorRole: req.user.role,
+            action: "emergency_closure_wait_selected",
+            entityType: "payment_booking",
+            entityId: booking.id,
+            metadata: { closureChoice: "wait" },
+          });
+          await connection.query(
+            `UPDATE payment_bookings SET closure_choice='wait'
+             WHERE id=? AND status='accepted' AND queue_status='Emergency Closed'`,
+            [booking.id],
+          );
+          await connection.commit();
+        } catch (error) {
+          await connection.rollback().catch(() => {});
+          throw error;
+        } finally {
+          connection.release();
+        }
+      }
       const [fresh] = await hydrateBookings(
         await findBookings("b.id=?", [booking.id], "LIMIT 1"),
       );
@@ -1121,12 +1323,16 @@ export async function setQueueStatus(req, res) {
         });
 
       if (action === "rejoin") {
-        await pool.query(
+        await setQueueStatusWithCapacity(
+          booking,
+          "Waiting",
           `UPDATE payment_bookings
            SET queue_status='Waiting', closure_choice='wait',
                refund_status=NULL, skipped_at=NOW()
            WHERE id=? AND status='accepted' AND queue_status='Emergency Closed'`,
           [booking.id],
+          req.user,
+          "emergency_closure_rejoined",
         );
         await addNotification({
           shopId: booking.shopId,
@@ -1136,12 +1342,15 @@ export async function setQueueStatus(req, res) {
           refId: booking.id,
         });
       } else {
-        await pool.query(
+        await setQueueStatusWithCapacity(
+          booking,
+          "Cancelled",
           `UPDATE payment_bookings
-           SET queue_status='Cancelled', refund_status='completed',
-               refund_id=?
+           SET queue_status='Cancelled',refund_status='completed',refund_id=?
            WHERE id=? AND status='accepted' AND refund_status='requested'`,
           [`REF-${crypto.randomUUID()}`, booking.id],
+          req.user,
+          "emergency_closure_refund_completed",
         );
         await addNotification({
           shopId: booking.shopId,
@@ -1181,7 +1390,7 @@ export async function setQueueStatus(req, res) {
       if (action === "swap") {
         const requestedPosition = Number(req.body?.targetPosition);
         const [waitingRows] = await connection.query(
-          `SELECT id
+          `SELECT id,queue_status
            FROM payment_bookings
            WHERE barber_id=? AND shop_id=? AND status='accepted'
              AND queue_status IN ('Waiting', 'Your Turn')
@@ -1219,11 +1428,21 @@ export async function setQueueStatus(req, res) {
         orderedIds.splice(targetIndex, 0, booking.id);
         for (let index = 0; index < orderedIds.length; index += 1) {
           const id = orderedIds[index];
+          const currentRow = waitingRows.find((row) => row.id === id);
+          const nextQueueStatus = index === 0 ? "Your Turn" : "Waiting";
+          await recordBookingTransition(connection, {
+            bookingId: id,
+            toQueueStatus: nextQueueStatus,
+            actorId: req.user.sub,
+            actorRole: req.user.role,
+            action: "queue_order_changed",
+            current: { status: "accepted", queue_status: currentRow.queue_status },
+          });
           await connection.query(
             `UPDATE payment_bookings
              SET queue_status=?, skipped_at=DATE_ADD(NOW(), INTERVAL ? SECOND)
              WHERE id=?`,
-            [index === 0 ? "Your Turn" : "Waiting", index, id],
+            [nextQueueStatus, index, id],
           );
         }
 
@@ -1232,11 +1451,25 @@ export async function setQueueStatus(req, res) {
           [booking.id],
         );
       } else if (action === "requeue") {
+        await recordBookingTransition(connection, {
+          bookingId: booking.id,
+          toQueueStatus: "Waiting",
+          actorId: req.user.sub,
+          actorRole: req.user.role,
+          action: "queue_entry_requeued",
+        });
         await connection.query(
           "UPDATE payment_bookings SET queue_status='Waiting', skipped_at=NOW(), skip_count=skip_count+1 WHERE id=?",
           [booking.id],
         );
       } else {
+        await recordBookingTransition(connection, {
+          bookingId: booking.id,
+          toQueueStatus: "Cancelled",
+          actorId: req.user.sub,
+          actorRole: req.user.role,
+          action: "queue_entry_removed",
+        });
         await connection.query(
           "UPDATE payment_bookings SET queue_status='Cancelled' WHERE id=?",
           [booking.id],
@@ -1278,20 +1511,24 @@ export async function setQueueStatus(req, res) {
       .json({ message: "You can only cancel a ticket that has not started." });
 
   if (status === "Skipped") {
-    await pool.query(
+    await setQueueStatusWithCapacity(
+      booking,
+      "Waiting",
       "UPDATE payment_bookings SET queue_status='Waiting', skipped_at=NOW(), skip_count=skip_count+1 WHERE id=?",
       [booking.id],
-    );
-  } else if (status === "Completed") {
-    await pool.query(
-      "UPDATE payment_bookings SET queue_status='Completed', completed_at=NOW() WHERE id=?",
-      [booking.id],
+      req.user,
+      "queue_entry_skipped",
     );
   } else {
-    await pool.query("UPDATE payment_bookings SET queue_status=? WHERE id=?", [
+    await setQueueStatusWithCapacity(
+      booking,
       status,
-      booking.id,
-    ]);
+      status === "Completed"
+        ? "UPDATE payment_bookings SET queue_status=?,completed_at=NOW() WHERE id=?"
+        : "UPDATE payment_bookings SET queue_status=? WHERE id=?",
+      [status, booking.id],
+      req.user,
+    );
   }
   requestScheduledQueueRecalculation({
     shopId: booking.shopId,

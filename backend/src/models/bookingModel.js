@@ -20,7 +20,7 @@ export async function findBookings(
   tail = "ORDER BY b.created_at DESC",
 ) {
   const [rows] = await pool.query(
-    `${SELECT_BOOKING} WHERE ${where} ${tail}`,
+    `${SELECT_BOOKING} WHERE (${where}) AND b.deleted_at IS NULL ${tail}`,
     params,
   );
   return rows;

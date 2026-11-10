@@ -1,28 +1,22 @@
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import { pool } from "../config/db.js";
 import { sendOtpEmail, emailConfigured } from "../config/mail.js";
+import {
+  canVerifyOtpHash,
+  createAccessToken,
+  isResetOtpHash,
+  isDevOtpEnabled,
+  tagOtpHash,
+  unwrapOtpHash,
+} from "../config/authSecurity.js";
 import {
   isValidEmail,
   isValidName,
   isValidOtp,
+  isStrongPassword,
   PATTERNS,
 } from "../utils/validators.js";
-
-const sign = (user) =>
-  jwt.sign(
-    {
-      sub: user.id,
-      role: user.role,
-      ...(user.shopId ? { shopId: user.shopId } : {}),
-      ...(user.permissions ? { permissions: user.permissions } : {}),
-    },
-    process.env.JWT_SECRET,
-    {
-      expiresIn: "7d",
-    },
-  );
 
 const cleanEmail = (email) =>
   String(email || "")
@@ -31,6 +25,13 @@ const cleanEmail = (email) =>
 const EMAIL_REGEX = PATTERNS.EMAIL;
 const otp = () => String(crypto.randomInt(100000, 1000000));
 
+export async function cleanupExpiredOtpCodes(query = pool.query.bind(pool)) {
+  const [result] = await query(
+    "DELETE FROM otp_codes WHERE expires_at < UTC_TIMESTAMP() LIMIT 500",
+  );
+  return Number(result.affectedRows || 0);
+}
+
 export async function requestOtp({
   email,
   role,
@@ -38,6 +39,7 @@ export async function requestOtp({
   password,
   intent = "signin",
 }) {
+  await cleanupExpiredOtpCodes();
   const clean = cleanEmail(email);
   if (!isValidEmail(clean)) throw new Error("Enter a valid email address.");
 
@@ -45,12 +47,36 @@ export async function requestOtp({
     throw new Error("Enter a valid name (2 to 60 alphabetic characters).");
   }
 
-  if (!["customer", "owner", "admin"].includes(role)) {
+    if (!["customer", "owner", "admin"].includes(role)) {
     throw new Error("Invalid account role.");
   }
 
+    if (!["signin", "create", "forgot"].includes(intent)) {
+      throw new Error("Invalid authentication request.");
+    }
+
+    if (intent === "create") {
+      if (role !== "admin" && !name?.trim())
+        throw new Error("Name is required when creating an account.");
+      if (
+        role !== "admin" &&
+        !isStrongPassword(password)
+      ) {
+        throw new Error(
+          "Password must be 12-128 characters and include uppercase, lowercase, a number and a symbol.",
+        );
+      }
+    }
+
+    const useDevCode = isDevOtpEnabled();
+    if (!emailConfigured && !useDevCode) {
+      throw new Error(
+        "Email service is not configured on the server. Set EMAIL_HOST, EMAIL_USER and EMAIL_APP_PASSWORD.",
+      );
+    }
+
   if (role === "admin" && clean !== cleanEmail(process.env.ADMIN_EMAIL)) {
-    throw new Error("This email is not configured for admin access.");
+    return { ok: true };
   }
 
   const [existing] = await pool.query(
@@ -59,9 +85,7 @@ export async function requestOtp({
   );
 
   if (existing.length && existing[0].role !== role) {
-    throw new Error(
-      "This email is already registered for another account type.",
-    );
+    return { ok: true };
   }
 
   if (
@@ -69,38 +93,14 @@ export async function requestOtp({
     !existing.length &&
     role !== "admin"
   ) {
-    throw new Error("No account found. Create an account first.");
+    return { ok: true };
   }
 
   if (intent === "create" && existing.length) {
-    throw new Error(
-      "An account already exists for this email. Sign in instead.",
-    );
+    return { ok: true };
   }
 
-  if (role !== "admin" && !existing.length && !name?.trim()) {
-    throw new Error("Name is required when creating an account.");
-  }
-
-  if (intent === "create") {
-    if (!password) throw new Error("Password is required.");
-    if (password.length < 8)
-      throw new Error("Password must be at least 8 characters.");
-  }
-
-  // When SMTP is not configured or for local test domains (e.g. admin@barberqueue.local),
-  // use the dev OTP so developers can sign in without needing an external mailbox.
-  const isLocalDomain = clean.endsWith(".local") || clean.endsWith(".test");
-  const useDevCode =
-    (!emailConfigured || isLocalDomain) &&
-    process.env.NODE_ENV !== "production";
-
-  if (!emailConfigured && !useDevCode) {
-    throw new Error(
-      "Email service is not configured on the server. Set EMAIL_HOST, EMAIL_USER and EMAIL_APP_PASSWORD.",
-    );
-  }
-  const code = useDevCode ? String(process.env.DEV_OTP || "123456") : otp();
+  const code = otp();
   const expires = new Date(
     Date.now() + Number(process.env.OTP_TTL_MINUTES || 5) * 60000,
   );
@@ -108,15 +108,17 @@ export async function requestOtp({
   await pool.query("DELETE FROM otp_codes WHERE email=?", [clean]);
   await pool.query(
     "INSERT INTO otp_codes(email,role,code_hash,expires_at) VALUES (?,?,?,?)",
-    [clean, role, await bcrypt.hash(code, 10), expires],
+    [
+      clean,
+      role,
+      tagOtpHash(await bcrypt.hash(code, 10), useDevCode, intent === "forgot" ? "reset" : "signin"),
+      expires,
+    ],
   );
 
-  if (process.env.NODE_ENV !== "production") {
-    console.log(`[AUTH DEV] OTP for ${clean} (${role}): ${code}`);
-  }
-
   if (useDevCode) {
-    return { ok: true, devOtp: code, emailConfigured: false };
+    console.log(`[AUTH DEV] OTP for ${clean} (${role}): ${code}`);
+    return { ok: true };
   }
 
   try {
@@ -132,36 +134,64 @@ export async function requestOtp({
   return { ok: true };
 }
 
-export async function verifyOtp({ email, role, name, code, password }) {
-  const clean = cleanEmail(email);
-  if (!isValidEmail(clean)) throw new Error("Enter a valid email address.");
-
-  if (!isValidOtp(code)) {
-    throw new Error("Enter a valid 6-digit verification code.");
-  }
-
+async function findValidOtp(clean, role, code, purpose = "signin") {
   const [rows] = await pool.query(
     "SELECT * FROM otp_codes WHERE email=? AND role=? ORDER BY id DESC LIMIT 1",
     [clean, role],
   );
-
-  if (!rows.length) throw new Error("Request a new OTP for this email.");
+  if (!rows.length) throw new Error("Invalid or expired verification code.");
 
   const item = rows[0];
   if (new Date(item.expires_at).getTime() < Date.now()) {
-    throw new Error("This code has expired. Request a new one.");
+    throw new Error("Invalid or expired verification code.");
   }
 
-  if (!(await bcrypt.compare(String(code), item.code_hash))) {
-    throw new Error("That code is not correct. Please try again.");
+  if (!canVerifyOtpHash(item.code_hash)) {
+    throw new Error("Invalid or expired verification code.");
   }
+  if (isResetOtpHash(item.code_hash) !== (purpose === "reset")) {
+    throw new Error("Invalid or expired verification code.");
+  }
+  const codeHash = unwrapOtpHash(item.code_hash);
+  if (!(await bcrypt.compare(String(code), codeHash))) {
+    throw new Error("Invalid or expired verification code.");
+  }
+  return item;
+}
 
-  await pool.query("DELETE FROM otp_codes WHERE email=?", [clean]);
+export async function verifyOtp({
+  email,
+  role,
+  name,
+  code,
+  password,
+  intent = "signin",
+}) {
+  await cleanupExpiredOtpCodes();
+  const clean = cleanEmail(email);
+  if (!isValidEmail(clean) || !isValidOtp(code))
+    throw new Error("Invalid or expired verification code.");
+
+  await findValidOtp(clean, role, code, intent === "forgot" ? "reset" : "signin");
 
   let [users] = await pool.query(
     "SELECT id,name,email,role,status,password_hash FROM users WHERE email=? LIMIT 1",
     [clean],
   );
+
+  if (intent === "forgot") {
+    if (
+      !users.length ||
+      users[0].role !== role ||
+      users[0].status !== "active" ||
+      role === "admin"
+    ) {
+      throw new Error("Invalid or expired verification code.");
+    }
+    return { ok: true };
+  }
+
+  await pool.query("DELETE FROM otp_codes WHERE email=?", [clean]);
 
   if (!users.length) {
     if (role === "admin") {
@@ -180,8 +210,10 @@ export async function verifyOtp({ email, role, name, code, password }) {
         ],
       );
     } else {
-      if (!password || password.length < 8) {
-        throw new Error("Password must be at least 8 characters.");
+      if (!isStrongPassword(password)) {
+        throw new Error(
+          "Password must be 12-128 characters and include uppercase, lowercase, a number and a symbol.",
+        );
       }
       const id = crypto.randomUUID();
       const passwordHash = await bcrypt.hash(password, 12);
@@ -214,74 +246,94 @@ export async function verifyOtp({ email, role, name, code, password }) {
   const user = users[0];
 
   if (user.status !== "active") {
-    throw new Error("This account is currently blocked.");
+    throw new Error("Invalid or expired verification code.");
   }
 
   return {
-    token: sign(user),
+    token: createAccessToken(user),
     user: { id: user.id, name: user.name, email: user.email, role: user.role },
   };
 }
 
+export async function resetPassword({ email, role, code, password }) {
+  const clean = cleanEmail(email);
+  if (
+    !isValidEmail(clean) ||
+    !isValidOtp(code) ||
+    !["customer", "owner"].includes(role)
+  ) {
+    throw new Error("Unable to reset password. Check the code and try again.");
+  }
+  if (!isStrongPassword(password)) {
+    throw new Error(
+      "Password must be 12-128 characters and include uppercase, lowercase, a number and a symbol.",
+    );
+  }
+
+  await findValidOtp(clean, role, code, "reset");
+  const [users] = await pool.query(
+    "SELECT id FROM users WHERE email=? AND role=? AND status='active' LIMIT 1",
+    [clean, role],
+  );
+  if (!users.length)
+    throw new Error("Unable to reset password. Check the code and try again.");
+
+  const passwordHash = await bcrypt.hash(password, 12);
+  const [result] = await pool.query(
+    "UPDATE users SET password_hash=? WHERE id=? AND status='active'",
+    [passwordHash, users[0].id],
+  );
+  if (!result.affectedRows)
+    throw new Error("Unable to reset password. Check the code and try again.");
+  await pool.query("DELETE FROM otp_codes WHERE email=?", [clean]);
+  return { ok: true };
+}
+
 export async function passwordLogin({ email, password, role }) {
   const clean = cleanEmail(email);
-  if (!EMAIL_REGEX.test(clean)) throw new Error("Enter a valid email address.");
-
-  if (!password) throw new Error("Password is required.");
+  if (!EMAIL_REGEX.test(clean) || !password)
+    throw new Error("Invalid email or password.");
 
   const [users] = await pool.query(
     "SELECT id,name,email,role,status,password_hash FROM users WHERE email=? LIMIT 1",
     [clean],
   );
-
-  if (!users.length) throw new Error("No account found with this email.");
-
   const user = users[0];
-
-  if (user.role === "admin") {
-    throw new Error("Admin login is OTP-only. Please sign in using OTP.");
+  if (
+    !user ||
+    user.role === "admin" ||
+    user.role !== role ||
+    user.status !== "active" ||
+    !user.password_hash ||
+    !(await bcrypt.compare(password, user.password_hash))
+  ) {
+    throw new Error("Invalid email or password.");
   }
-
-  if (user.role !== role)
-    throw new Error("This account belongs to a different role.");
-  if (user.status !== "active")
-    throw new Error("This account is currently blocked.");
-  if (!user.password_hash) {
-    throw new Error(
-      "Password login is not set up for this account. Please sign in using OTP.",
-    );
-  }
-
-  const valid = await bcrypt.compare(password, user.password_hash);
-  if (!valid) throw new Error("Incorrect email or password.");
 
   return {
-    token: sign(user),
+    token: createAccessToken(user),
     user: { id: user.id, name: user.name, email: user.email, role: user.role },
   };
 }
 
 export async function shopLogin({ email, password }) {
   const clean = cleanEmail(email);
-  if (!isValidEmail(clean)) {
-    throw new Error("Enter a valid email address.");
-  }
-  const [rows] = await pool.query(
-    "SELECT id,name,owner_id,login_email,login_password_hash,status FROM shops WHERE login_email=? LIMIT 1",
+  if (!isValidEmail(clean) || !password)
+    throw new Error("Invalid shop or manager credentials.");
+
+  const [shops] = await pool.query(
+    "SELECT id,name,owner_id,login_email,login_password_hash,status,active FROM shops WHERE login_email=? LIMIT 1",
     [clean],
   );
-
+  const shop = shops[0];
   if (
-    rows.length &&
-    (await bcrypt.compare(password, rows[0].login_password_hash))
+    shop &&
+    (await bcrypt.compare(String(password), shop.login_password_hash))
   ) {
-    const shop = rows[0];
-    if (shop.status !== "approved") {
-      throw new Error(`This shop is ${shop.status} and cannot be accessed.`);
-    }
-
+    if (shop.status !== "approved" || !shop.active)
+      throw new Error("Invalid shop or manager credentials.");
     return {
-      token: sign({
+      token: createAccessToken({
         id: shop.id,
         name: shop.name,
         role: "shop",
@@ -299,62 +351,57 @@ export async function shopLogin({ email, password }) {
     };
   }
 
-  // Check co-owners
-  const [coRows] = await pool.query(
-    `SELECT c.id, c.shop_id, c.name, c.email, c.phone, c.title, c.password_hash, c.permissions_json, c.status AS co_status,
-            s.name AS shop_name, s.owner_id, s.status AS shop_status, s.active AS shop_active
-     FROM shop_co_owners c
-     JOIN shops s ON s.id = c.shop_id
+  const [coOwners] = await pool.query(
+    `SELECT c.id,c.shop_id,c.name,c.email,c.phone,c.title,c.password_hash,c.permissions_json,c.status AS co_status,
+            s.name AS shop_name,s.owner_id,s.status AS shop_status,s.active AS shop_active
+     FROM shop_co_owners c JOIN shops s ON s.id=c.shop_id
      WHERE LOWER(c.email)=? LIMIT 1`,
     [clean],
   );
-
+  const coOwner = coOwners[0];
   if (
-    coRows.length &&
-    (await bcrypt.compare(password, coRows[0].password_hash))
+    coOwner &&
+    (await bcrypt.compare(String(password), coOwner.password_hash))
   ) {
-    const co = coRows[0];
-    if (co.co_status !== "active") {
-      throw new Error(
-        "This co-owner account is currently inactive. Contact the shop owner.",
-      );
+    if (
+      coOwner.co_status !== "active" ||
+      coOwner.shop_status !== "approved" ||
+      !coOwner.shop_active
+    ) {
+      throw new Error("Invalid shop or manager credentials.");
     }
-    if (co.shop_status !== "approved") {
-      throw new Error(`This shop is ${co.shop_status} and cannot be accessed.`);
-    }
-
-    let perms = {};
+    let permissions = {};
     try {
-      perms =
-        typeof co.permissions_json === "object" && co.permissions_json !== null
-          ? co.permissions_json
-          : JSON.parse(co.permissions_json || "{}");
+      permissions =
+        typeof coOwner.permissions_json === "object" &&
+        coOwner.permissions_json !== null
+          ? coOwner.permissions_json
+          : JSON.parse(coOwner.permissions_json || "{}");
     } catch {
-      perms = {};
+      permissions = {};
     }
-
     return {
-      token: sign({
-        id: co.id,
-        name: co.name,
+      token: createAccessToken({
+        id: coOwner.id,
+        name: coOwner.name,
         role: "co_owner",
-        shopId: co.shop_id,
-        permissions: perms,
+        shopId: coOwner.shop_id,
+        permissions,
       }),
       user: {
-        id: co.id,
-        name: co.name,
-        email: co.email,
-        phone: co.phone,
+        id: coOwner.id,
+        name: coOwner.name,
+        email: coOwner.email,
+        phone: coOwner.phone,
         role: "co_owner",
-        title: co.title || "Co-Owner",
-        shopId: co.shop_id,
-        shopName: co.shop_name,
-        ownerId: co.owner_id,
-        permissions: perms,
+        title: coOwner.title || "Co-Owner",
+        shopId: coOwner.shop_id,
+        shopName: coOwner.shop_name,
+        ownerId: coOwner.owner_id,
+        permissions,
       },
     };
   }
 
-  throw new Error("Invalid shop or co-owner email or password.");
+  throw new Error("Invalid shop or manager credentials.");
 }

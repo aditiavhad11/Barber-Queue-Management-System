@@ -17,6 +17,7 @@ import {
   isValidName,
   isValidEmail,
   isValidPhone,
+  isStrongPassword,
 } from "../../utils/validators";
 import {
   CO_OWNER_PERMISSIONS,
@@ -109,12 +110,12 @@ export default function CoOwners() {
       notifyError("Please enter a valid 10-digit mobile number.");
       return;
     }
-    if (!editingCoOwner && (!form.password || form.password.length < 6)) {
-      notifyError("Password must be at least 6 characters for login access.");
+    if (!editingCoOwner && !isStrongPassword(form.password)) {
+      notifyError("Use 12-128 characters with uppercase, lowercase, a number and a symbol.");
       return;
     }
-    if (editingCoOwner && form.password && form.password.length < 6) {
-      notifyError("Password must be at least 6 characters.");
+    if (editingCoOwner && form.password && !isStrongPassword(form.password)) {
+      notifyError("Use 12-128 characters with uppercase, lowercase, a number and a symbol.");
       return;
     }
 
@@ -464,8 +465,12 @@ export default function CoOwners() {
                 <input
                   type={showPassword ? "text" : "password"}
                   className="input pr-10"
+                  minLength={12}
+                  maxLength={128}
                   placeholder={
-                    editingCoOwner ? "Enter new password" : "At least 6 characters"
+                    editingCoOwner
+                      ? "Enter new password"
+                      : "12+ characters with a number and symbol"
                   }
                   value={form.password}
                   onChange={(e) =>

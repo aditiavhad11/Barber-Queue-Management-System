@@ -18,6 +18,9 @@ test("migration files exist and follow sequential numbering pattern", () => {
   assert.ok(files.length >= 2, "Expected at least 2 migration files");
   assert.equal(files[0], "001_initial_schema.sql");
   assert.equal(files[1], "002_schemes_and_features.sql");
+  assert.equal(files[2], "003_payment_booking_date.sql");
+  assert.equal(files[3], "004_emergency_closure_email_outbox.sql");
+  assert.equal(files[4], "005_booking_soft_delete.sql");
 
   for (const file of files) {
     assert.match(file, /^\d{3}_[a-z0-9_]+\.sql$/, `Filename ${file} must match 000_name.sql format`);
@@ -43,6 +46,25 @@ test("002_schemes_and_features includes schemes, reviews, co-owners, emergency c
   assert.match(content, /CREATE TABLE IF NOT EXISTS shop_co_owners/i);
   assert.match(content, /CREATE TABLE IF NOT EXISTS booking_service_edits/i);
   assert.match(content, /CREATE TABLE IF NOT EXISTS emergency_closures/i);
+});
+
+test("003 ensures legacy payment_bookings tables have the scheduled booking date column", () => {
+  const content = fs.readFileSync(path.join(migrationsDir, "003_payment_booking_date.sql"), "utf-8");
+  assert.match(content, /TABLE_NAME='payment_bookings'.*COLUMN_NAME='booking_date'/i);
+  assert.match(content, /ALTER TABLE payment_bookings ADD COLUMN booking_date DATE NULL/i);
+});
+
+test("004 adds an idempotent email delivery marker to the closure outbox", () => {
+  const content = fs.readFileSync(path.join(migrationsDir, "004_emergency_closure_email_outbox.sql"), "utf-8");
+  assert.match(content, /TABLE_NAME='emergency_closure_notifications'.*COLUMN_NAME='email_sent_at'/i);
+  assert.match(content, /ADD COLUMN email_sent_at DATETIME NULL/i);
+});
+
+test("005 adds soft-delete metadata without dropping payment records", () => {
+  const content = fs.readFileSync(path.join(migrationsDir, "005_booking_soft_delete.sql"), "utf-8");
+  assert.match(content, /ADD COLUMN deleted_at DATETIME NULL/i);
+  assert.match(content, /ADD COLUMN deleted_by CHAR\(64\) NULL/i);
+  assert.doesNotMatch(content, /DROP TABLE|DELETE FROM payment_bookings/i);
 });
 
 test("emergency closure derivation correctly identifies active vs ended/expired closures", () => {

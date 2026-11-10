@@ -29,6 +29,7 @@ import {
   isValidPhone,
   isValidName,
   isValidEmail,
+  isStrongPassword,
   isValidAge,
   isValidServiceName,
   isValidPrice,
@@ -230,8 +231,8 @@ export default function CreateShop() {
       if (!coOwner.phone.trim() || !isValidPhone(coOwner.phone))
         x.coOwnerPhone = "Enter a valid 10-digit contact phone for co-owner.";
 
-      if (!coOwner.password || coOwner.password.length < 6)
-        x.coOwnerPassword = "Password must be at least 6 characters.";
+      if (!isStrongPassword(coOwner.password))
+        x.coOwnerPassword = "Use 12-128 characters with uppercase, lowercase, a number and a symbol.";
     }
     setErrs(x);
     if (Object.keys(x).length) {
@@ -882,7 +883,9 @@ export default function CreateShop() {
                 <input
                   type={showCoOwnerPassword ? "text" : "password"}
                   className="input pr-10"
-                  placeholder="At least 6 characters"
+                  minLength={12}
+                  maxLength={128}
+                  placeholder="12+ characters with a number and symbol"
                   value={coOwner.password}
                   onChange={(e) =>
                     setCoOwner({ ...coOwner, password: e.target.value })

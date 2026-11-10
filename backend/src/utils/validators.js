@@ -20,6 +20,9 @@ export const PATTERNS = {
   // OTP code: exactly 6 digits
   OTP: /^\d{6}$/,
 
+  // Password: 12-128 characters with upper, lower, digit and symbol
+  PASSWORD: /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{12,128}$/,
+
   // Price: positive number with up to 2 decimal places (e.g. 50, 150.50)
   PRICE: /^(?:[1-9]\d*|0)(?:\.\d{1,2})?$/,
 
@@ -82,6 +85,9 @@ export const isValidServiceName = (val) =>
 
 export const isValidOtp = (val) =>
   PATTERNS.OTP.test(String(val || "").trim());
+
+export const isStrongPassword = (val) =>
+  typeof val === "string" && PATTERNS.PASSWORD.test(val);
 
 export const isValidPrice = (val) =>
   PATTERNS.PRICE.test(String(val ?? "").trim()) && Number(val) > 0;

@@ -346,6 +346,9 @@ CREATE TABLE IF NOT EXISTS payment_bookings (
   skipped_at DATETIME NULL,
   skip_count INT NOT NULL DEFAULT 0,
   completed_at DATETIME NULL,
+  deleted_at DATETIME NULL,
+  deleted_by CHAR(64) NULL,
+  deleted_by_role VARCHAR(20) NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uq_booking_shop_token (shop_id, token),
@@ -357,13 +360,15 @@ CREATE TABLE IF NOT EXISTS payment_bookings (
   INDEX idx_booking_customer (customer_id, status),
   INDEX idx_booking_request (customer_id, request_hash, status),
   INDEX idx_booking_scheme_status (scheme_id,status),
-  INDEX idx_booking_scheduled_queue (booking_date,queue_status,barber_id)
+  INDEX idx_booking_scheduled_queue (booking_date,queue_status,barber_id),
+  INDEX idx_booking_deleted_at (deleted_at)
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS emergency_closure_notifications (
   closure_id CHAR(36) NOT NULL,
   booking_id CHAR(36) NOT NULL,
   sent_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  email_sent_at DATETIME NULL,
   PRIMARY KEY (closure_id, booking_id),
   FOREIGN KEY (closure_id) REFERENCES emergency_closures(id) ON DELETE CASCADE,
   FOREIGN KEY (booking_id) REFERENCES payment_bookings(id) ON DELETE CASCADE
@@ -503,6 +508,22 @@ SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DA
 SET @ddl := IF(@c=0, 'ALTER TABLE payment_bookings ADD COLUMN completed_at DATETIME NULL', 'SELECT 1');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='deleted_at');
+SET @ddl := IF(@c=0, 'ALTER TABLE payment_bookings ADD COLUMN deleted_at DATETIME NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='deleted_by');
+SET @ddl := IF(@c=0, 'ALTER TABLE payment_bookings ADD COLUMN deleted_by CHAR(64) NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='deleted_by_role');
+SET @ddl := IF(@c=0, 'ALTER TABLE payment_bookings ADD COLUMN deleted_by_role VARCHAR(20) NULL', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @c := (SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND INDEX_NAME='idx_booking_deleted_at');
+SET @ddl := IF(@c=0, 'CREATE INDEX idx_booking_deleted_at ON payment_bookings (deleted_at)', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- status enum: add 'payment_submitted' etc. on databases created before the UPI flow
 SET @type := (SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_bookings' AND COLUMN_NAME='status');
 SET @ddl := IF(@type IS NOT NULL AND LOCATE('''payment_submitted''', @type)=0,
@@ -585,6 +606,10 @@ SET payment_submitted_at = COALESCE(payment_submitted_at, paid_at, created_at)
 WHERE status = 'payment_submitted' AND payment_submitted_at IS NULL;
 
 -- ---- barbers (new fields: age, phone, email, working_days_json) ------
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='emergency_closure_notifications' AND COLUMN_NAME='email_sent_at');
+SET @ddl := IF(@c=0, 'ALTER TABLE emergency_closure_notifications ADD COLUMN email_sent_at DATETIME NULL AFTER sent_at', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='barbers' AND COLUMN_NAME='age');
 SET @ddl := IF(@c=0, 'ALTER TABLE barbers ADD COLUMN age TINYINT UNSIGNED NULL', 'SELECT 1');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;

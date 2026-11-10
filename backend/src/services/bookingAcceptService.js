@@ -1,5 +1,7 @@
 import { AppError } from "../utils/AppError.js";
 import { localDateKey, minutesUntilAppointment } from "../utils/time.js";
+import { QUEUE_ERRORS, validateQueueCapacity } from "./queueCapacityService.js";
+import { recordBookingTransition } from "./bookingStateMachine.js";
 
 /**
  * Core business logic for accepting a booking into the queue.
@@ -12,38 +14,14 @@ import { localDateKey, minutesUntilAppointment } from "../utils/time.js";
  * @param {string}  [overrideToken]  - Optional manual token (e.g. req.body.token)
  * @returns {Promise<{ token: string }>}
  */
-export async function acceptBookingCore(connection, booking, overrideToken = "") {
-  // 1. Lock barber row & validate queue capacity
-  const [barberRows] = await connection.query(
-    "SELECT id,queue_limit FROM barbers WHERE id=? AND shop_id=? FOR UPDATE",
-    [booking.barberId, booking.shopId],
-  );
-  const limit = Number(barberRows[0]?.queue_limit || 0);
-  if (!limit)
-    throw AppError.conflict(
-      "This barber has no valid queue capacity configured.",
-      "QUEUE_CAPACITY_NOT_CONFIGURED",
-    );
-
-  // 2. Check active queue count
-  const [activeRows] = await connection.query(
-    `SELECT COUNT(*) AS total FROM payment_bookings
-     WHERE shop_id=? AND barber_id=? AND status='accepted'
-       AND queue_status IN ('Waiting','Your Turn','In Service','Scheduled')`,
-    [booking.shopId, booking.barberId],
-  );
-  if (Number(activeRows[0].total) >= limit) {
-    const [waitRows] = await connection.query(
-      `SELECT COALESCE(SUM(duration_minutes),0) AS minutes FROM payment_bookings
-       WHERE shop_id=? AND barber_id=? AND status='accepted'
-         AND queue_status IN ('Waiting','Your Turn','In Service')`,
-      [booking.shopId, booking.barberId],
-    );
-    throw AppError.conflict(
-      `Cannot take in queue till for next ${Number(waitRows[0].minutes || 0)} minutes, as queue is full.`,
-      "QUEUE_FULL",
-    );
-  }
+export async function acceptBookingCore(connection, booking, overrideToken = "", actor = {}) {
+  // Lock the barber and count accepted entries plus recent payment reservations.
+  await validateQueueCapacity(connection, {
+    shopId: booking.shopId,
+    barberId: booking.barberId,
+    bookingDate: booking.bookingDate,
+    excludeBookingId: booking.id,
+  });
 
   // 3. Walk-in appointment overlap check (only for today's walk-ins)
   if (booking.bookingDate === localDateKey() && !booking.scheduledTime) {
@@ -55,7 +33,7 @@ export async function acceptBookingCore(connection, booking, overrideToken = "")
            AND COALESCE(queue_status, '') NOT IN
              ('Cancelled','Completed','No Show')
          )
-         AND scheduled_time > TIME(NOW())
+         AND scheduled_time > TIME(CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30'))
        ORDER BY scheduled_time ASC`,
       [booking.shopId, booking.barberId, booking.bookingDate],
     );
@@ -82,8 +60,8 @@ export async function acceptBookingCore(connection, booking, overrideToken = "")
       });
       if (blockingAppointment)
         throw AppError.conflict(
-          `Cannot take in queue because it would overlap the scheduled appointment at ${String(blockingAppointment.scheduled_time).slice(0, 5)}.`,
-          "APPOINTMENT_OVERLAP",
+          QUEUE_ERRORS.APPOINTMENT_OVERLAP.message,
+          QUEUE_ERRORS.APPOINTMENT_OVERLAP.code,
         );
     }
   }
@@ -101,6 +79,22 @@ export async function acceptBookingCore(connection, booking, overrideToken = "")
     .trim()
     .toUpperCase();
   if (!/^A\d{3,6}$/.test(token)) token = await nextFree();
+
+  const nextQueueStatus =
+    booking.bookingDate !== localDateKey()
+      ? "Prebooked"
+      : booking.scheduledTime
+        ? "Scheduled"
+        : "Waiting";
+  await recordBookingTransition(connection, {
+    bookingId: booking.id,
+    toBookingStatus: "accepted",
+    toQueueStatus: nextQueueStatus,
+    actorId: actor.sub,
+    actorRole: actor.role || "system",
+    action: "booking_accepted",
+    metadata: { shopId: booking.shopId, barberId: booking.barberId },
+  });
 
   // 5. UPDATE with dup-entry retry (up to 3 attempts)
   let tokenToUse = token;
@@ -145,5 +139,28 @@ export async function acceptBookingCore(connection, booking, overrideToken = "")
   }
 
   return { token, accepted: true };
+}
+
+export async function executeBookingAcceptance(
+  connection,
+  booking,
+  overrideToken = "",
+  accept = acceptBookingCore,
+  actor = {},
+) {
+  let transactionStarted = false;
+  try {
+    await connection.beginTransaction();
+    transactionStarted = true;
+    const result = await accept(connection, booking, overrideToken, actor);
+    await connection.commit();
+    transactionStarted = false;
+    return result;
+  } catch (error) {
+    if (transactionStarted) await connection.rollback().catch(() => {});
+    throw error;
+  } finally {
+    connection.release();
+  }
 }
 

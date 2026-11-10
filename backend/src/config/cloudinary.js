@@ -29,7 +29,7 @@ function configureCloudinary() {
   return cloudinary;
 }
 
-export function uploadImage(buffer, folder) {
+export function uploadImage(buffer, folder, publicId) {
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
     return Promise.reject(new Error("Invalid or empty image buffer."));
   }
@@ -44,6 +44,7 @@ export function uploadImage(buffer, folder) {
     const stream = client.uploader.upload_stream(
       {
         folder: folder.trim(),
+        ...(publicId ? { public_id: publicId, use_filename: false, unique_filename: false } : {}),
         resource_type: "image",
       },
       (error, result) => {
@@ -61,5 +62,14 @@ export function uploadImage(buffer, folder) {
 
     stream.on("error", reject);
     stream.end(buffer);
+  });
+}
+
+export async function deleteUploadedImage(publicId) {
+  if (typeof publicId !== "string" || !publicId.trim()) return;
+  const client = configureCloudinary();
+  return client.uploader.destroy(publicId.trim(), {
+    resource_type: "image",
+    invalidate: true,
   });
 }
