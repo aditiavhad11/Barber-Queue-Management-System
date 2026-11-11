@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../../hooks/useAuth";
 import { notifyError, notifySuccess } from "../../utils/toast";
@@ -7,10 +7,12 @@ import {
   isValidEmail,
   isValidName,
   isValidOtp,
+  isStrongPassword,
 } from "../../utils/validators";
 
 export default function Auth({ mode }) {
   const nav = useNavigate();
+  const location = useLocation();
   const auth = useAuth();
   const [q] = useSearchParams();
   const requestedRole = q.get("role");
@@ -24,11 +26,12 @@ export default function Auth({ mode }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [otp, setOtp] = useState("");
   const [err, setErr] = useState("");
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [devOtp, setDevOtp] = useState("");
   const [showPwd, setShowPwd] = useState({});
   const togglePwd = (key) => setShowPwd((p) => ({ ...p, [key]: !p[key] }));
   const PwdToggle = ({ name }) => (
@@ -46,6 +49,11 @@ export default function Auth({ mode }) {
   useEffect(() => {
     if (isAdmin && mode === "signin") setLoginMethod("otp");
   }, [isAdmin, mode]);
+
+  useEffect(() => {
+    if (mode === "reset" && (!location.state?.email || !location.state?.code))
+      nav("/forgot-password", { replace: true });
+  }, [location.state, mode, nav]);
 
   const titles = {
     signin: "Sign in",
@@ -66,15 +74,15 @@ export default function Auth({ mode }) {
         setErr("Enter a valid name (2 to 60 alphabetic characters).");
         return;
       }
-      if (!password || password.length < 8) {
-        setErr("Password must be at least 8 characters.");
+      if (!isStrongPassword(password)) {
+        setErr("Use 12-128 characters with uppercase, lowercase, a number and a symbol.");
         return;
       }
     }
     setBusy(true);
 
     try {
-      const result = await auth.requestOtp({
+      await auth.requestOtp({
         email,
         role,
         name,
@@ -82,7 +90,6 @@ export default function Auth({ mode }) {
         intent: mode,
       });
 
-      setDevOtp(result?.devOtp || "");
       setStep("otp");
       setSent(true);
       notifySuccess("We sent a 6-digit code to your email.");
@@ -139,8 +146,8 @@ export default function Auth({ mode }) {
 
     try {
       if (mode === "forgot") {
-        await auth.verifyOtp({ email, otp, role });
-        nav("/reset-password");
+        await auth.verifyOtp({ email, otp, role, intent: "forgot" });
+        nav("/reset-password", { state: { email, otp, role } });
         return;
       }
 
@@ -150,6 +157,7 @@ export default function Auth({ mode }) {
         role,
         name,
         password,
+        intent: mode,
       });
 
       nav(
@@ -159,6 +167,34 @@ export default function Auth({ mode }) {
             ? "/admin"
             : "/app",
       );
+    } catch (error) {
+      notifyError(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitReset = async (e) => {
+    e.preventDefault();
+    setErr("");
+    if (!isStrongPassword(newPassword)) {
+      setErr("Use 12-128 characters with uppercase, lowercase, a number and a symbol.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setErr("Passwords do not match.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await auth.resetPassword({
+        email: location.state.email,
+        role: location.state.role,
+        code: location.state.otp,
+        password: newPassword,
+      });
+      notifySuccess("Password reset successfully. Sign in with your new password.");
+      nav(`/sign-in?role=${encodeURIComponent(location.state.role || "customer")}`);
     } catch (error) {
       notifyError(error.message);
     } finally {
@@ -280,7 +316,8 @@ export default function Auth({ mode }) {
         <input
           type={showPwd["create"] ? "text" : "password"}
           required
-          minLength={8}
+          minLength={12}
+          maxLength={128}
           value={password}
           onChange={(e) => {
             setPassword(e.target.value);
@@ -325,20 +362,17 @@ export default function Auth({ mode }) {
           )}
 
           {mode === "reset" ? (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                nav("/sign-in");
-              }}
-              className="space-y-4 mt-6"
-            >
+            <form onSubmit={submitReset} className="space-y-4 mt-6">
               <div className="relative">
                 <input
                   type={showPwd["new"] ? "text" : "password"}
                   required
-                  minLength={8}
+                  minLength={12}
+                  maxLength={128}
                   placeholder="New password"
                   className="input pr-10"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
                 />
                 <PwdToggle name="new" />
               </div>
@@ -348,10 +382,15 @@ export default function Auth({ mode }) {
                   required
                   placeholder="Confirm password"
                   className="input pr-10"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
                 />
                 <PwdToggle name="confirm" />
               </div>
-              <button className="btn w-full">Reset password</button>
+              {err && <p className="text-sm text-rose">{err}</p>}
+              <button className="btn w-full" disabled={busy}>
+                {busy ? "Resetting..." : "Reset password"}
+              </button>
             </form>
           ) : mode === "create" && step === "form" ? (
             createForm
@@ -416,12 +455,6 @@ export default function Auth({ mode }) {
               <p className="text-sm text-coffee/70">
                 We sent a 6-digit code to {email}.
               </p>
-
-              {devOtp && (
-                <p className="text-sm text-olive">
-                  Development OTP: <b>{devOtp}</b>
-                </p>
-              )}
 
               <input
                 inputMode="numeric"

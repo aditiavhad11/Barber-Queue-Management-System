@@ -6,6 +6,7 @@ import {
   isValidEmail,
   isValidPhone,
   isValidName,
+  isStrongPassword,
   isValidShopName,
   isValidServiceName,
   isValidAge,
@@ -19,6 +20,8 @@ import {
 import { parseJson } from "../utils/json.js";
 import { localDateKey, isValidDateKey } from "../utils/time.js";
 import { AppError } from "../utils/AppError.js";
+import { writeAuditLog } from "../services/auditLogService.js";
+import { recordBookingTransition } from "../services/bookingStateMachine.js";
 
 /* ------------------------------------------------------------------ */
 /* Small helpers                                                       */
@@ -162,6 +165,116 @@ const CO_OWNER_COLUMNS =
   "id, shop_id, name, email, phone, title, permissions_json, status, created_at, updated_at";
 const BARBER_COLUMNS =
   "id,shop_id,name,gender,age,phone,email,experience_years,specialization,working_days_json,queue_limit,rating,status,photo_url";
+const PUBLIC_BARBER_COLUMNS =
+  "id,shop_id,name,gender,age,experience_years,specialization,working_days_json,queue_limit,rating,status,photo_url";
+const SHOP_PUBLIC_COLUMNS =
+  "id,name,description,contact,address,latitude,longitude,hours_open,hours_close,availability_json,policies_json,status,active,rating,review_count,upi_qr_url,created_at,updated_at";
+const SHOP_OWNER_COLUMNS =
+  `${SHOP_PUBLIC_COLUMNS},owner_id,login_email,rejection_reason`;
+const SHOP_ADMIN_COLUMNS = SHOP_OWNER_COLUMNS;
+
+const mapBarberResponse = (barber, shopId, includePrivate) => {
+  const response = {
+    id: barber.id,
+    shopId,
+    name: barber.name,
+    gender: barber.gender || "",
+    age: barber.age != null ? Number(barber.age) : null,
+    experience: barber.experience_years || 0,
+    specialization: barber.specialization || "",
+    workingDays: parseJson(barber.working_days_json, null),
+    queueLimit: Number(barber.queue_limit || 10),
+    rating: Number(barber.rating),
+    status: barber.status,
+    photo: barber.photo_url || "",
+    services: barber.serviceIds || [],
+  };
+  if (includePrivate) {
+    response.phone = barber.phone || "";
+    response.email = barber.email || "";
+  }
+  return response;
+};
+
+function mapShopCommon(row, details, includePrivate) {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    contact: row.contact,
+    address: row.address,
+    latitude: row.latitude,
+    longitude: row.longitude,
+    hours_open: row.hours_open,
+    hours_close: row.hours_close,
+    availability_json: row.availability_json,
+    policies_json: row.policies_json,
+    status: row.status,
+    active: row.active,
+    rating: row.rating,
+    review_count: row.review_count,
+    upi_qr_url: row.upi_qr_url,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    reviewsList: (details.reviews || []).map((review) => ({
+      id: review.id,
+      queueId: review.queueId,
+      ...(includePrivate ? { customerId: review.customerId } : {}),
+      customer: review.customer,
+      rating: Number(review.rating),
+      text: review.text,
+      date: review.date,
+      shopId: row.id,
+    })),
+    hours: {
+      open: String(row.hours_open || "09:00").slice(0, 5),
+      close: String(row.hours_close || "21:00").slice(0, 5),
+    },
+    location:
+      row.latitude == null
+        ? null
+        : {
+            lat: Number(row.latitude),
+            lng: Number(row.longitude),
+            confirmed: true,
+          },
+    availability: details.availability || {},
+    policy: parseJson(row.policies_json),
+    upiQrUrl: row.upi_qr_url || "",
+    photos: details.photos || [],
+    services: details.services || [],
+    barbers: (details.barbers || []).map((barber) =>
+      mapBarberResponse(barber, row.id, includePrivate),
+    ),
+  };
+}
+
+export function mapPublicShopResponse(row, details = {}) {
+  return {
+    ...mapShopCommon(row, details, false),
+    coOwners: [],
+  };
+}
+
+export function mapOwnerShopResponse(row, details = {}) {
+  return {
+    ...mapShopCommon(row, details, true),
+    ownerId: row.owner_id,
+    loginEmail: row.login_email || "",
+    rejection: row.rejection_reason || "",
+    coOwners: details.coOwners || [],
+  };
+}
+
+export function mapAdminShopResponse(row, details = {}) {
+  return {
+    ...mapShopCommon(row, details, true),
+    ownerId: row.owner_id,
+    loginEmail: row.login_email || "",
+    rejection: row.rejection_reason || "",
+    coOwners: details.coOwners || [],
+  };
+}
 
 /* ------------------------------------------------------------------ */
 /* Access helpers                                                      */
@@ -232,13 +345,16 @@ async function linkBarberServices(conn, barberId, shopId, serviceIds) {
 /* Hydration (batched: ~6 queries total regardless of shop count)      */
 /* ------------------------------------------------------------------ */
 
-/**
- * Full hydration: used by owner/admin/shop-detail endpoints.
- * Includes full reviewsList, coOwners, services, barbers, etc.
- */
-async function hydrateShops(shopRows) {
+async function hydrateShops(shopRows, audience = "public") {
   if (!shopRows.length) return [];
   const shopIds = shopRows.map((r) => r.id);
+  const includePrivate = audience !== "public";
+  const shopMapper =
+    audience === "admin"
+      ? mapAdminShopResponse
+      : audience === "owner"
+        ? mapOwnerShopResponse
+        : mapPublicShopResponse;
 
   const [[photoRows], [serviceRows], [barberRows], coOwnerRows, reviewRows, closureRows] =
     await Promise.all([
@@ -251,11 +367,12 @@ async function hydrateShops(shopRows) {
         [shopIds],
       ),
       pool.query(
-        `SELECT ${BARBER_COLUMNS} FROM barbers WHERE shop_id IN (?) ORDER BY id ASC`,
+        `SELECT ${includePrivate ? BARBER_COLUMNS : PUBLIC_BARBER_COLUMNS} FROM barbers WHERE shop_id IN (?) ORDER BY id ASC`,
         [shopIds],
       ),
-      pool
-        .query(
+      includePrivate
+        ? pool
+            .query(
           `SELECT ${CO_OWNER_COLUMNS} FROM shop_co_owners WHERE shop_id IN (?) ORDER BY created_at ASC`,
           [shopIds],
         )
@@ -263,7 +380,8 @@ async function hydrateShops(shopRows) {
         .catch((error) => {
           if (error.code === "ER_NO_SUCH_TABLE") return [];
           throw error;
-        }),
+        })
+        : Promise.resolve([]),
       pool
         .query(
           "SELECT r.id,r.shop_id,r.queue_id,r.customer_id,r.rating,r.text,r.created_at,u.name AS customer_name FROM booking_reviews r JOIN users u ON u.id=r.customer_id WHERE r.shop_id IN (?) ORDER BY r.created_at DESC",
@@ -304,9 +422,8 @@ async function hydrateShops(shopRows) {
   const reviewsByShop = groupBy(reviewRows, "shop_id");
   const closuresByShop = groupBy(closureRows, "shop_id");
 
-  return shopRows.map((row) => ({
-    ...row,
-    reviewsList: (reviewsByShop.get(row.id) || []).map((r) => ({
+  return shopRows.map((row) => {
+    const reviews = (reviewsByShop.get(row.id) || []).map((r) => ({
       id: r.id,
       queueId: r.queue_id,
       customerId: r.customer_id,
@@ -317,26 +434,11 @@ async function hydrateShops(shopRows) {
         day: "2-digit",
         month: "short",
         year: "numeric",
+        timeZone: "Asia/Kolkata",
       }),
       shopId: row.id,
-    })),
-    coOwners: (coOwnersByShop.get(row.id) || []).map(mapCoOwner),
-    ownerId: row.owner_id,
-    loginEmail: row.login_email,
-    rejection: row.rejection_reason || "",
-    hours: {
-      open: String(row.hours_open || "09:00").slice(0, 5),
-      close: String(row.hours_close || "21:00").slice(0, 5),
-    },
-    location:
-      row.latitude == null
-        ? null
-        : {
-            lat: Number(row.latitude),
-            lng: Number(row.longitude),
-            confirmed: true,
-          },
-    availability: (() => {
+    }));
+    const availability = (() => {
       const availability = parseJson(row.availability_json, {});
       const activeClosures = closuresByShop.get(row.id) || [];
       const now = new Date();
@@ -381,43 +483,35 @@ async function hydrateShops(shopRows) {
           : null;
       }
       return availability;
-    })(),
-    policy: parseJson(row.policies_json),
-    upiQrUrl: row.upi_qr_url || "",
-    photos: (photosByShop.get(row.id) || []).map((p) => ({
-      id: p.id,
-      url: p.url,
-      primary: Boolean(p.is_primary),
-    })),
-    services: (servicesByShop.get(row.id) || []).map((x) => ({
-      id: x.id,
-      shopId: row.id,
-      name: x.name,
-      price: Number(x.price),
-      duration: Number(x.duration_minutes),
-      enabled: Boolean(x.enabled),
-    })),
-    barbers: (barbersByShop.get(row.id) || []).map((b) => ({
-      id: b.id,
-      shopId: row.id,
-      name: b.name,
-      gender: b.gender || "",
-      age: b.age != null ? Number(b.age) : null,
-      phone: b.phone || "",
-      email: b.email || "",
-      experience: b.experience_years || 0,
-      specialization: b.specialization || "",
-      workingDays: parseJson(b.working_days_json, null),
-      queueLimit: Number(b.queue_limit || 10),
-      rating: Number(b.rating),
-      status: b.status,
-      photo: b.photo_url || "",
-      services: servicesByBarber.get(b.id) || [],
-    })),
-  }));
+    })();
+    const details = {
+      reviews,
+      coOwners: (coOwnersByShop.get(row.id) || []).map(mapCoOwner),
+      availability,
+      photos: (photosByShop.get(row.id) || []).map((photo) => ({
+        id: photo.id,
+        url: photo.url,
+        primary: Boolean(photo.is_primary),
+      })),
+      services: (servicesByShop.get(row.id) || []).map((service) => ({
+        id: service.id,
+        shopId: row.id,
+        name: service.name,
+        price: Number(service.price),
+        duration: Number(service.duration_minutes),
+        enabled: Boolean(service.enabled),
+      })),
+      barbers: (barbersByShop.get(row.id) || []).map((barber) => ({
+        ...barber,
+        serviceIds: servicesByBarber.get(barber.id) || [],
+      })),
+    };
+    return shopMapper(row, details);
+  });
 }
 
-const hydrateShop = async (row) => (await hydrateShops([row]))[0];
+const hydrateShop = async (row, audience = "public") =>
+  (await hydrateShops([row], audience))[0];
 
 /**
  * Lightweight hydration for the public shops listing (GET /shops).
@@ -573,7 +667,7 @@ async function hydrateShopsLite(shopRows) {
 
 export async function listApproved(req, res) {
   const [rows] = await pool.query(
-    "SELECT * FROM shops WHERE status='approved' AND active=1 ORDER BY created_at DESC",
+    `SELECT ${SHOP_PUBLIC_COLUMNS} FROM shops WHERE status='approved' AND active=1 ORDER BY created_at DESC`,
   );
   const hydrated = await hydrateShops(rows);
   const etag = `"${crypto
@@ -589,17 +683,17 @@ export async function listApproved(req, res) {
 
 export async function listMine(req, res) {
   const [rows] = await pool.query(
-    "SELECT * FROM shops WHERE owner_id=? ORDER BY created_at DESC",
+    `SELECT ${SHOP_OWNER_COLUMNS} FROM shops WHERE owner_id=? ORDER BY created_at DESC`,
     [req.user.sub],
   );
-  res.json(await hydrateShops(rows));
+  res.json(await hydrateShops(rows, "owner"));
 }
 
 export async function listAdmin(_req, res) {
   const [rows] = await pool.query(
-    "SELECT * FROM shops ORDER BY created_at DESC",
+    `SELECT ${SHOP_ADMIN_COLUMNS} FROM shops ORDER BY created_at DESC`,
   );
-  res.json(await hydrateShops(rows));
+  res.json(await hydrateShops(rows, "admin"));
 }
 
 export async function createShop(req, res) {
@@ -659,12 +753,19 @@ export async function createShop(req, res) {
     : b.coOwner
       ? [b.coOwner]
       : [];
+  const submittedCoOwners = coOwners.filter(
+    (co) => co?.name?.trim() && co?.email?.trim(),
+  );
+  if (submittedCoOwners.some((co) => !isStrongPassword(String(co.password || "")))) {
+    return res.status(400).json({
+      message: "Co-owner passwords must be 12-128 characters and include uppercase, lowercase, a number and a symbol.",
+    });
+  }
 
   const [hash, coOwnerRows] = await Promise.all([
     bcrypt.hash(crypto.randomBytes(32).toString("hex"), 12),
     Promise.all(
-      coOwners
-        .filter((co) => co?.name?.trim() && co?.email?.trim())
+      submittedCoOwners
         .map(async (co) => [
           crypto.randomUUID(),
           id,
@@ -672,7 +773,7 @@ export async function createShop(req, res) {
           String(co.email).trim().toLowerCase(),
           String(co.phone || "").trim(),
           String(co.title || "Co-Owner").trim(),
-          await bcrypt.hash(String(co.password || "barber1234"), 10),
+          await bcrypt.hash(String(co.password), 12),
           JSON.stringify(co.permissions || {}),
           co.status || "active",
         ]),
@@ -792,8 +893,8 @@ export async function createShop(req, res) {
 
     await connection.commit();
 
-    const [rows] = await pool.query("SELECT * FROM shops WHERE id=?", [id]);
-    res.status(201).json(await hydrateShop(rows[0]));
+    const [rows] = await pool.query(`SELECT ${SHOP_OWNER_COLUMNS} FROM shops WHERE id=?`, [id]);
+    res.status(201).json(await hydrateShop(rows[0], "owner"));
   } catch (error) {
     await connection.rollback();
     if (error.code === "ER_DUP_ENTRY")
@@ -811,12 +912,14 @@ export async function updateShop(req, res) {
   const b = req.body || {};
   const shopId = req.params.id;
 
-  if (!(await ownsShop(req, shopId))) return notOwned(res);
+  if (!(await canManageShop(req, shopId))) return notOwned(res);
 
   const [[currentShop]] = await pool.query(
-    "SELECT availability_json FROM shops WHERE id=? AND owner_id=? LIMIT 1",
-    [shopId, req.user.sub],
+    "SELECT availability_json,owner_id FROM shops WHERE id=? LIMIT 1",
+    [shopId],
   );
+  if (!currentShop) return notOwned(res);
+  const actorId = req.user.role === "owner" ? req.user.sub : currentShop.owner_id;
   const currentAvailability = parseJson(
     currentShop?.availability_json,
     {},
@@ -952,15 +1055,15 @@ export async function updateShop(req, res) {
           period.start,
           period.end,
           String(nextClosure.reason || "").trim() || null,
-          req.user.sub,
+          actorId,
         ],
       );
     }
 
     if (fields.length) {
       await connection.query(
-        `UPDATE shops SET ${fields.join(", ")} WHERE id=? AND owner_id=?`,
-        [...values, shopId, req.user.sub],
+        `UPDATE shops SET ${fields.join(", ")} WHERE id=?`,
+        [...values, shopId],
       );
     }
 
@@ -988,28 +1091,33 @@ export async function updateShop(req, res) {
       const startDate = nextClosure.startDate || localDateKey(new Date(period.start));
       const endDate = nextClosure.endDate || localDateKey(new Date(period.end));
       const [affectedBookings] = await connection.query(
-        `SELECT id, customer_id, token
+        `SELECT id, customer_id, token,status,queue_status
          FROM payment_bookings
          WHERE shop_id=? AND status='accepted'
-           AND (
-             queue_status IN ('Waiting','Your Turn','In Service','Prebooked')
-             OR (booking_date BETWEEN ? AND ?)
-           )
+           AND COALESCE(queue_status,'Waiting') IN ('Waiting','Your Turn','In Service','Scheduled','Prebooked')
            AND (booking_date IS NULL OR booking_date BETWEEN ? AND ?)
          FOR UPDATE`,
-        [shopId, startDate, endDate, startDate, endDate],
+        [shopId, startDate, endDate],
       );
       closureBookingIds = affectedBookings.map((booking) => booking.id);
+      for (const booking of affectedBookings) {
+        await recordBookingTransition(connection, {
+          bookingId: booking.id,
+          toQueueStatus: "Emergency Closed",
+          actorId: req.user.sub,
+          actorRole: req.user.role,
+          action: "emergency_closure_queue_transition",
+          metadata: { shopId, closureId },
+          current: booking,
+        });
+      }
       await connection.query(
         `UPDATE payment_bookings
          SET queue_status='Emergency Closed', closure_choice=NULL
          WHERE shop_id=? AND status='accepted'
-           AND (
-             queue_status IN ('Waiting','Your Turn','In Service','Prebooked')
-             OR (booking_date BETWEEN ? AND ?)
-           )
+           AND COALESCE(queue_status,'Waiting') IN ('Waiting','Your Turn','In Service','Scheduled','Prebooked')
            AND (booking_date IS NULL OR booking_date BETWEEN ? AND ?)`,
-        [shopId, startDate, endDate, startDate, endDate],
+        [shopId, startDate, endDate],
       );
       if (affectedBookings.length) {
         const notificationValues = affectedBookings.flatMap((booking) => [
@@ -1033,21 +1141,19 @@ export async function updateShop(req, res) {
           );
         }
       }
-      await connection.query(
-        `INSERT INTO audit_logs
-           (actor_id, action, entity_type, entity_id, metadata_json)
-         VALUES (?, 'emergency_closure_started', 'shop', ?, ?)`,
-        [
-          req.user.sub,
-          shopId,
-          JSON.stringify({
-            startDate: nextClosure.startDate,
-            endDate: nextClosure.endDate || null,
-            reason: nextClosure.reason || "",
-            bookingsCancelled: affectedBookings.length,
-          }),
-        ],
-      );
+      await writeAuditLog(connection, {
+        actorId: req.user.sub,
+        actorRole: req.user.role,
+        action: "emergency_closure_started",
+        entityType: "shop",
+        entityId: shopId,
+        metadata: {
+          startDate: nextClosure.startDate,
+          endDate: nextClosure.endDate || null,
+          reason: nextClosure.reason || "",
+          bookingsCancelled: affectedBookings.length,
+        },
+      });
       console.info("[emergency-closure] bookings marked and customers notified", {
         shopId,
         bookingsCancelled: affectedBookings.length,
@@ -1062,9 +1168,10 @@ export async function updateShop(req, res) {
     connection.release();
   }
 
-  const [rows] = await pool.query("SELECT * FROM shops WHERE id=? LIMIT 1", [
-    shopId,
-  ]);
+  const [rows] = await pool.query(
+    `SELECT ${SHOP_OWNER_COLUMNS} FROM shops WHERE id=? LIMIT 1`,
+    [shopId],
+  );
   if (closureStarted) {
     try {
       if (closureBookingIds.length) {
@@ -1093,16 +1200,17 @@ export async function updateShop(req, res) {
       }
     } catch (error) {
       console.error(
-        "[emergency-closure] could not queue asynchronous emails:",
+        "[emergency-closure] email outbox enqueue failed; pending rows will be retried:",
+        { shopId, closureId, pendingBookings: closureBookingIds.length },
         error.message,
       );
     }
   }
-  res.json(await hydrateShop(rows[0]));
+  res.json(await hydrateShop(rows[0], "owner"));
 }
 
 export async function listEmergencyClosures(req, res) {
-  if (!(await ownsShop(req, req.params.id))) return notOwned(res);
+  if (!(await canManageShop(req, req.params.id))) return notOwned(res);
   const [rows] = await pool.query(
     `SELECT id, closure_type AS type, start_at AS startAt, end_at AS endAt,
             reason, status, created_at AS createdAt, ended_at AS endedAt
@@ -1115,7 +1223,7 @@ export async function listEmergencyClosures(req, res) {
 }
 
 export async function endEmergencyClosure(req, res) {
-  if (!(await ownsShop(req, req.params.id))) notOwned();
+  if (!(await canManageShop(req, req.params.id))) notOwned();
   const [result] = await pool.query(
     "UPDATE emergency_closures SET status='ended', ended_at=NOW() WHERE id=? AND shop_id=? AND status='active'",
     [req.params.closureId, req.params.id],
@@ -1133,32 +1241,104 @@ export async function updateStatus(req, res) {
     req.body.status === "reactivated" ? "approved" : req.body.status;
   if (status === "rejected" && !String(req.body.rejection || "").trim())
     return res.status(400).json({ message: "A rejection reason is required." });
-  await pool.query(
-    "UPDATE shops SET status=?,active=?,rejection_reason=? WHERE id=?",
-    [
-      status,
-      status === "approved" ? 1 : 0,
-      status === "rejected" ? String(req.body.rejection).trim() : null,
-      req.params.id,
-    ],
-  );
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [shops] = await connection.query(
+      "SELECT status FROM shops WHERE id=? FOR UPDATE",
+      [req.params.id],
+    );
+    if (!shops.length) throw AppError.notFound("Shop not found.", "SHOP_NOT_FOUND");
+    await connection.query(
+      "UPDATE shops SET status=?,active=?,rejection_reason=? WHERE id=?",
+      [
+        status,
+        status === "approved" ? 1 : 0,
+        status === "rejected" ? String(req.body.rejection).trim() : null,
+        req.params.id,
+      ],
+    );
+    await writeAuditLog(connection, {
+      actorId: req.user.sub,
+      actorRole: req.user.role,
+      action: "shop_status_changed",
+      entityType: "shop",
+      entityId: req.params.id,
+      metadata: {
+        before: shops[0].status,
+        after: status,
+        rejection: status === "rejected" ? String(req.body.rejection).trim() : null,
+      },
+    });
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    throw error;
+  } finally {
+    connection.release();
+  }
   res.json({ ok: true, status });
 }
 
 export async function resubmit(req, res) {
-  await pool.query(
-    "UPDATE shops SET status='pending',active=0,rejection_reason=NULL WHERE id=? AND owner_id=?",
-    [req.params.id, req.user.sub],
-  );
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [shops] = await connection.query(
+      "SELECT status FROM shops WHERE id=? AND owner_id=? FOR UPDATE",
+      [req.params.id, req.user.sub],
+    );
+    if (!shops.length) return notOwned(res);
+    await connection.query(
+      "UPDATE shops SET status='pending',active=0,rejection_reason=NULL WHERE id=? AND owner_id=?",
+      [req.params.id, req.user.sub],
+    );
+    await writeAuditLog(connection, {
+      actorId: req.user.sub,
+      actorRole: req.user.role,
+      action: "shop_resubmitted",
+      entityType: "shop",
+      entityId: req.params.id,
+      metadata: { before: shops[0].status, after: "pending" },
+    });
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    throw error;
+  } finally {
+    connection.release();
+  }
   res.json({ ok: true, status: "pending" });
 }
 
 export async function deleteShop(req, res) {
-  const [result] = await pool.query(
-    "DELETE FROM shops WHERE id=? AND owner_id=?",
-    [req.params.id, req.user.sub],
-  );
-  if (!result.affectedRows) return notOwned(res);
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [shops] = await connection.query(
+      "SELECT id,name,status FROM shops WHERE id=? AND owner_id=? FOR UPDATE",
+      [req.params.id, req.user.sub],
+    );
+    if (!shops.length) return notOwned(res);
+    await writeAuditLog(connection, {
+      actorId: req.user.sub,
+      actorRole: req.user.role,
+      action: "shop_deleted",
+      entityType: "shop",
+      entityId: req.params.id,
+      metadata: { name: shops[0].name, status: shops[0].status },
+    });
+    await connection.query("DELETE FROM shops WHERE id=? AND owner_id=?", [
+      req.params.id,
+      req.user.sub,
+    ]);
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    throw error;
+  } finally {
+    connection.release();
+  }
   res.json({ ok: true });
 }
 
@@ -1640,10 +1820,10 @@ export async function createCoOwner(req, res) {
       .status(400)
       .json({ message: "Enter a valid 10-digit mobile number for the co-owner." });
   }
-  if (!password || password.length < 6) {
+  if (!isStrongPassword(password)) {
     return res
       .status(400)
-      .json({ message: "Password must be at least 6 characters." });
+      .json({ message: "Password must be 12-128 characters and include uppercase, lowercase, a number and a symbol." });
   }
 
   const [existing] = await pool.query(
@@ -1657,7 +1837,7 @@ export async function createCoOwner(req, res) {
   }
 
   const id = crypto.randomUUID();
-  const passwordHash = await bcrypt.hash(password, 10);
+  const passwordHash = await bcrypt.hash(password, 12);
   await pool.query(
     "INSERT INTO shop_co_owners(id, shop_id, name, email, phone, title, password_hash, permissions_json, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')",
     [
@@ -1711,10 +1891,12 @@ export async function updateCoOwner(req, res) {
   if (b.permissions !== undefined)
     add("permissions_json", JSON.stringify(b.permissions));
   if (b.password) {
-    if (String(b.password).length < 6) {
-      return res.status(400).json({ message: "Password must be at least 6 characters." });
+    if (!isStrongPassword(String(b.password))) {
+      return res.status(400).json({
+        message: "Password must be 12-128 characters and include uppercase, lowercase, a number and a symbol.",
+      });
     }
-    add("password_hash", await bcrypt.hash(String(b.password), 10));
+    add("password_hash", await bcrypt.hash(String(b.password), 12));
   }
 
   if (fields.length) {

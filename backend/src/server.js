@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
 import dotenv from "dotenv";
 import { healthcheck, pool } from "./config/db.js";
 import { runMigrations } from "./config/migrate.js";
@@ -24,8 +25,23 @@ import {
   stopScheduledQueueWorker,
 } from "./services/scheduledQueueService.js";
 import { httpLogger, logger } from "./utils/logger.js";
+import { validateAuthEnvironment } from "./config/authSecurity.js";
+import {
+  createCorsOriginCallback,
+  getAllowedOrigins,
+  validateCorsEnvironment,
+} from "./config/httpSecurity.js";
+import { apiRateLimiter } from "./middleware/rateLimit.js";
 
 dotenv.config();
+
+try {
+  validateAuthEnvironment();
+  validateCorsEnvironment();
+} catch (error) {
+  logger.fatal(error.message);
+  process.exit(1);
+}
 
 if (!process.env.JWT_SECRET) {
   logger.fatal(
@@ -35,26 +51,13 @@ if (!process.env.JWT_SECRET) {
 }
 
 export const app = express();
-const allowedOrigins = (process.env.CLIENT_URL || "")
-  .split(",")
-  .map((x) => x.trim())
-  .filter(Boolean);
+const allowedOrigins = getAllowedOrigins();
 
+app.use(helmet());
+app.use("/api", apiRateLimiter);
 app.use(
   cors({
-    origin: (origin, callback) => {
-      if (!origin || !allowedOrigins.length || allowedOrigins.includes(origin))
-        return callback(null, true);
-      try {
-        const u = new URL(origin);
-        if (
-          process.env.NODE_ENV !== "production" &&
-          ["localhost", "127.0.0.1"].includes(u.hostname)
-        )
-          return callback(null, true);
-      } catch {}
-      callback(new Error("CORS origin not allowed"));
-    },
+    origin: createCorsOriginCallback(allowedOrigins),
   }),
 );
 

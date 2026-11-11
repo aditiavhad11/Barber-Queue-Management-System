@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { auth, requireRole } from "../middleware/auth.js";
+import { auth, requirePermission, requireRole } from "../middleware/auth.js";
 import {
   paymentQuote,
   submitPayment,
@@ -36,18 +36,21 @@ router.get(
   "/closure-resolutions",
   auth,
   requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_queue"),
   listClosureResolutions,
 );
 router.get(
   "/pending",
   auth,
   requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_queue"),
   listPending,
 );
 router.get(
   "/prebookings",
   auth,
   requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_queue"),
   listPrebookings,
 );
 
@@ -55,12 +58,14 @@ router.get(
   "/upi-settings",
   auth,
   requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_upi"),
   getUpiSettings,
 );
 router.put(
   "/upi-settings",
   auth,
   requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_upi"),
   saveUpiSettings,
 );
 
@@ -68,22 +73,36 @@ router.get(
   "/queue",
   auth,
   requireRole("customer", "owner", "shop", "co_owner"),
+  requirePermission(["manage_queue", "view_analytics"], { anyOf: true }),
   listQueue,
 );
 router.get("/service-edits/mine", auth, requireRole("customer"), listMyServiceEdits);
-router.get("/service-edits/pending", auth, requireRole("owner", "shop", "co_owner"), listPendingServiceEdits);
-router.patch("/service-edits/:editId", auth, requireRole("owner", "shop", "co_owner"), resolveServiceEdit);
+router.get(
+  "/service-edits/pending",
+  auth,
+  requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_queue"),
+  listPendingServiceEdits,
+);
+router.patch(
+  "/service-edits/:editId",
+  auth,
+  requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_queue", { resource: "serviceEdit" }),
+  resolveServiceEdit,
+);
 router.post("/:id/service-edits", auth, requireRole("customer"), requestServiceEdit);
 router.patch(
   "/:id/queue-status",
   auth,
   requireRole("customer", "owner", "shop", "co_owner"),
+  requirePermission("manage_queue", { resource: "booking" }),
   setQueueStatus,
 );
 router.delete(
   "/:id/history",
   auth,
-  requireRole("owner", "shop", "co_owner"),
+  requireRole("owner", "shop"),
   deleteBookingHistory,
 );
 
@@ -92,18 +111,21 @@ router.patch(
   "/:id/accept",
   auth,
   requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_queue", { resource: "booking" }),
   acceptBooking,
 );
 router.patch(
   "/:id/take-into-queue",
   auth,
   requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_queue", { resource: "booking" }),
   takePrebooking,
 );
 router.patch(
   "/:id/decline",
   auth,
   requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_queue", { resource: "booking" }),
   declineBooking,
 );
 

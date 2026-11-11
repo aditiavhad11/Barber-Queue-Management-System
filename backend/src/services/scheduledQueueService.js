@@ -1,8 +1,10 @@
 import { pool } from "../config/db.js";
+import { recordBookingTransition } from "./bookingStateMachine.js";
 import {
   scheduledQueueDate,
   minutesUntilAppointment,
 } from "../utils/time.js";
+import { hasQueueCapacity } from "./queueCapacityService.js";
 
 const ACTIVE_QUEUE_STATUSES = ["Waiting", "Your Turn", "In Service"];
 const EXCLUDED_STATUSES = [
@@ -45,7 +47,7 @@ export function scheduledInsertionPlan({
   for (const booking of ordered) {
     const durationMinutes = Number(booking.duration_minutes || 0);
     if (
-      activeCount >= Number(queueLimit || 0) ||
+      !hasQueueCapacity({ queueLimit, committedCount: activeCount }) ||
       !shouldInsertScheduledBooking({
         remainingQueueMinutes,
         durationMinutes,
@@ -98,6 +100,14 @@ async function processBarber(connection, barberId, bookingDate, now) {
     now,
   });
   for (const bookingId of plan) {
+    const booking = scheduled.find((item) => item.id === bookingId);
+    await recordBookingTransition(connection, {
+      bookingId,
+      toQueueStatus: "Waiting",
+      actorRole: "system",
+      action: "scheduled_booking_added_to_queue",
+      current: { status: "accepted", queue_status: booking.queue_status },
+    });
     const [result] = await connection.query(
       `UPDATE payment_bookings
        SET queue_status='Waiting', skipped_at=COALESCE(skipped_at,NOW())

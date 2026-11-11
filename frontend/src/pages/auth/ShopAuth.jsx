@@ -2,14 +2,12 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../../hooks/useAuth";
-import { useOwner } from "../../hooks/useOwnerStore";
 import { notifyError, notifySuccess } from "../../utils/toast";
 import { isValidEmail } from "../../utils/validators";
 
 export default function ShopAuth() {
   const nav = useNavigate();
-  const { login } = useAuth();
-  const { shops } = useOwner();
+  const { loginWithShop } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -26,93 +24,7 @@ export default function ShopAuth() {
     }
     setBusy(true);
     try {
-      if (import.meta.env.VITE_API_URL) {
-        const res = await fetch(
-          `${import.meta.env.VITE_API_URL.replace(/\/$/, "")}/auth/shop-login`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, password }),
-          },
-        );
-        const data = await res.json();
-        if (!res.ok)
-          throw new Error(data.message || "Invalid shop or co-owner credentials.");
-        sessionStorage.setItem("token", data.token);
-        sessionStorage.setItem("role", data.user.role || "shop");
-        sessionStorage.setItem("shopId", data.user.shopId);
-        sessionStorage.setItem("user", JSON.stringify(data.user));
-        window.dispatchEvent(new Event("barber-auth-change"));
-      } else {
-        const cleanEmail = email.trim().toLowerCase();
-        let coMatch = null;
-        let matchedShop = null;
-
-        for (const s of shops) {
-          const co = (s.coOwners || []).find(
-            (c) => c.email?.toLowerCase() === cleanEmail,
-          );
-          if (co) {
-            coMatch = co;
-            matchedShop = s;
-            break;
-          }
-        }
-
-        if (coMatch && matchedShop) {
-          if (coMatch.password && coMatch.password !== password) {
-            throw new Error("Invalid co-owner password.");
-          }
-          if (coMatch.status !== "active") {
-            throw new Error(
-              "This co-owner account has been deactivated by the shop owner.",
-            );
-          }
-          if (matchedShop.status !== "approved" || !matchedShop.active) {
-            throw new Error(
-              matchedShop.status === "pending"
-                ? "This shop is still pending admin approval."
-                : `This shop is ${matchedShop.status} and cannot be accessed.`,
-            );
-          }
-          login("co_owner", matchedShop.id, {
-            id: coMatch.id,
-            name: coMatch.name,
-            email: coMatch.email,
-            phone: coMatch.phone,
-            role: "co_owner",
-            title: coMatch.title || "Co-Owner",
-            shopId: matchedShop.id,
-            shopName: matchedShop.name,
-            ownerId: matchedShop.ownerId,
-            permissions: coMatch.permissions || {},
-          });
-          nav("/shop");
-          return;
-        }
-
-        const shop = shops.find(
-          (s) => s.loginEmail?.toLowerCase() === cleanEmail,
-        );
-        if (!shop || shop.loginPassword !== password)
-          throw new Error("Invalid shop or co-owner email or password.");
-        if (shop.status !== "approved" || !shop.active)
-          throw new Error(
-            shop.status === "pending"
-              ? "This shop is still pending admin approval."
-              : shop.status === "rejected"
-                ? "This shop was rejected. The owner must resubmit it."
-                : "This shop is suspended and cannot be accessed.",
-          );
-          login("shop", shop.id, {
-            id: shop.id,
-            name: shop.name,
-            role: "shop",
-            shopId: shop.id,
-            ownerId: shop.ownerId,
-            permissions: { all: true },
-          });
-      }
+      await loginWithShop({ email, password });
       notifySuccess("Signed in to the shop dashboard.");
       nav("/shop");
     } catch (error) {

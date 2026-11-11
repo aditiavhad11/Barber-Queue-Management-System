@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { auth, requireRole } from "../middleware/auth.js";
+import { auth, requirePermission, requireRole } from "../middleware/auth.js";
 import {
   listApproved,
   listMine,
@@ -25,6 +25,20 @@ import {
 } from "../controllers/shopController.js";
 
 const router = Router();
+const shopUpdatePermissions = (req) => {
+  const permissions = [];
+  if (
+    ["name", "description", "contact", "address", "location", "policy", "photos"].some(
+      (field) => req.body?.[field] !== undefined,
+    )
+  ) {
+    permissions.push("manage_profile");
+  }
+  if (["hours", "availability", "isOpen"].some((field) => req.body?.[field] !== undefined)) {
+    permissions.push("manage_hours");
+  }
+  return permissions.length ? permissions : ["manage_profile"];
+};
 
 router.get("/", listApproved);
 
@@ -34,12 +48,25 @@ router.get("/mine", auth, requireRole("owner"), listMine);
 
 router.post("/", auth, requireRole("owner"), createShop);
 
-router.patch("/:id", auth, requireRole("owner"), updateShop);
-router.get("/:id/emergency-closures", auth, requireRole("owner"), listEmergencyClosures);
+router.patch(
+  "/:id",
+  auth,
+  requireRole("owner", "shop", "co_owner"),
+  requirePermission(shopUpdatePermissions),
+  updateShop,
+);
+router.get(
+  "/:id/emergency-closures",
+  auth,
+  requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_hours"),
+  listEmergencyClosures,
+);
 router.patch(
   "/:id/emergency-closures/:closureId/end",
   auth,
-  requireRole("owner"),
+  requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_hours"),
   endEmergencyClosure,
 );
 
@@ -47,6 +74,7 @@ router.post(
   "/:id/services",
   auth,
   requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_services"),
   createService,
 );
 
@@ -54,6 +82,7 @@ router.get(
   "/:id/services/:serviceId/unavailability",
   auth,
   requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_services"),
   listServiceUnavailability,
 );
 
@@ -61,6 +90,7 @@ router.post(
   "/:id/services/:serviceId/unavailability",
   auth,
   requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_services"),
   saveServiceUnavailability,
 );
 
@@ -68,6 +98,7 @@ router.delete(
   "/:id/services/:serviceId/unavailability/:restrictionId",
   auth,
   requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_services"),
   removeServiceUnavailability,
 );
 
@@ -75,6 +106,7 @@ router.post(
   "/:id/barbers",
   auth,
   requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_barbers"),
   createBarber,
 );
 
@@ -82,6 +114,7 @@ router.patch(
   "/:id/barbers/:barberId",
   auth,
   requireRole("owner", "shop", "co_owner"),
+  requirePermission("manage_barbers"),
   updateBarber,
 );
 
