@@ -419,11 +419,20 @@ const hydrateShop = async (row) => (await hydrateShops([row]))[0];
 /* Shops                                                               */
 /* ------------------------------------------------------------------ */
 
-export async function listApproved(_req, res) {
+export async function listApproved(req, res) {
   const [rows] = await pool.query(
     "SELECT * FROM shops WHERE status='approved' AND active=1 ORDER BY created_at DESC",
   );
-  res.json(await hydrateShops(rows));
+  const hydrated = await hydrateShops(rows);
+  const etag = `"${crypto
+    .createHash("sha256")
+    .update(JSON.stringify(hydrated))
+    .digest("hex")
+    .slice(0, 16)}"`;
+  res.set("ETag", etag);
+  res.set("Cache-Control", "no-cache");
+  if (req.headers["if-none-match"] === etag) return res.sendStatus(304);
+  res.json(hydrated);
 }
 
 export async function listMine(req, res) {
