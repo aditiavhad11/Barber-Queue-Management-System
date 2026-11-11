@@ -513,15 +513,172 @@ async function hydrateShops(shopRows, audience = "public") {
 const hydrateShop = async (row, audience = "public") =>
   (await hydrateShops([row], audience))[0];
 
+/**
+ * Lightweight hydration for the public shops listing (GET /shops).
+ * Key differences from hydrateShops:
+ *  - No full reviewsList: only avgRating + reviewCount (one aggregate query)
+ *  - No coOwners (not needed by customers)
+ * Everything else (photos, services, barbers, closures) is the same.
+ */
+async function hydrateShopsLite(shopRows) {
+  if (!shopRows.length) return [];
+  const shopIds = shopRows.map((r) => r.id);
+
+  const [[photoRows], [serviceRows], [barberRows], reviewAggRows, closureRows] =
+    await Promise.all([
+      pool.query(
+        "SELECT id,shop_id,url,is_primary FROM shop_photos WHERE shop_id IN (?) ORDER BY is_primary DESC, created_at ASC",
+        [shopIds],
+      ),
+      pool.query(
+        "SELECT id,shop_id,name,price,duration_minutes,enabled FROM services WHERE shop_id IN (?) ORDER BY id ASC",
+        [shopIds],
+      ),
+      pool.query(
+        `SELECT ${BARBER_COLUMNS} FROM barbers WHERE shop_id IN (?) ORDER BY id ASC`,
+        [shopIds],
+      ),
+      // Single aggregate instead of fetching every review row
+      pool
+        .query(
+          `SELECT shop_id,
+                  COUNT(*) AS review_count,
+                  ROUND(AVG(rating), 2) AS avg_rating
+           FROM booking_reviews WHERE shop_id IN (?) GROUP BY shop_id`,
+          [shopIds],
+        )
+        .then(([rows]) => rows)
+        .catch(() => []),
+      pool
+        .query(
+          `SELECT id, shop_id, closure_type, start_at, end_at, reason
+           FROM emergency_closures
+           WHERE shop_id IN (?) AND status='active' AND (end_at IS NULL OR end_at > NOW())
+           ORDER BY start_at DESC`,
+          [shopIds],
+        )
+        .then(([rows]) => rows)
+        .catch(() => []),
+    ]);
+
+  // barber -> services mapping
+  const servicesByBarber = new Map();
+  if (barberRows.length) {
+    const [mapRows] = await pool.query(
+      "SELECT barber_id,service_id FROM barber_services WHERE barber_id IN (?)",
+      [barberRows.map((b) => b.id)],
+    );
+    for (const m of mapRows) {
+      const list = servicesByBarber.get(m.barber_id);
+      if (list) list.push(m.service_id);
+      else servicesByBarber.set(m.barber_id, [m.service_id]);
+    }
+  }
+
+  const photosByShop = groupBy(photoRows, "shop_id");
+  const servicesByShop = groupBy(serviceRows, "shop_id");
+  const barbersByShop = groupBy(barberRows, "shop_id");
+  const closuresByShop = groupBy(closureRows, "shop_id");
+  const reviewAggByShop = new Map(
+    reviewAggRows.map((r) => [r.shop_id, { count: Number(r.review_count), avg: Number(r.avg_rating || 0) }]),
+  );
+
+  return shopRows.map((row) => {
+    const agg = reviewAggByShop.get(row.id) || { count: 0, avg: 0 };
+    const activeClosures = closuresByShop.get(row.id) || [];
+    const now = new Date();
+    const availability = (() => {
+      const av = parseJson(row.availability_json, {});
+      const currentClosure =
+        activeClosures.find((c) => {
+          const start = new Date(c.start_at);
+          const end = c.end_at ? new Date(c.end_at) : null;
+          return start <= now && (!end || end > now);
+        }) || activeClosures[0];
+      if (
+        currentClosure &&
+        new Date(currentClosure.start_at) <= now &&
+        (!currentClosure.end_at || new Date(currentClosure.end_at) > now)
+      ) {
+        av.emergencyClosed = true;
+        av.isOpen = false;
+        av.temporaryClosure = {
+          id: currentClosure.id, active: true, type: currentClosure.closure_type,
+          startAt: new Date(currentClosure.start_at).toISOString(),
+          endAt: currentClosure.end_at ? new Date(currentClosure.end_at).toISOString() : null,
+          reason: currentClosure.reason || "",
+        };
+      } else {
+        av.emergencyClosed = false;
+        av.temporaryClosure = currentClosure ? {
+          id: currentClosure.id, active: true, type: currentClosure.closure_type,
+          startAt: new Date(currentClosure.start_at).toISOString(),
+          endAt: currentClosure.end_at ? new Date(currentClosure.end_at).toISOString() : null,
+          reason: currentClosure.reason || "",
+        } : null;
+      }
+      return av;
+    })();
+
+    return {
+      ...row,
+      // Aggregate only — no full reviewsList in listing response
+      reviewCount: agg.count,
+      avgRating: agg.avg,
+      reviewsList: [], // empty for listing; full list available on shop detail
+      coOwners: [],
+      ownerId: row.owner_id,
+      loginEmail: row.login_email,
+      rejection: row.rejection_reason || "",
+      hours: {
+        open: String(row.hours_open || "09:00").slice(0, 5),
+        close: String(row.hours_close || "21:00").slice(0, 5),
+      },
+      location:
+        row.latitude == null
+          ? null
+          : { lat: Number(row.latitude), lng: Number(row.longitude), confirmed: true },
+      availability,
+      policy: parseJson(row.policies_json),
+      upiQrUrl: row.upi_qr_url || "",
+      photos: (photosByShop.get(row.id) || []).map((p) => ({
+        id: p.id, url: p.url, primary: Boolean(p.is_primary),
+      })),
+      services: (servicesByShop.get(row.id) || []).map((x) => ({
+        id: x.id, shopId: row.id, name: x.name,
+        price: Number(x.price), duration: Number(x.duration_minutes), enabled: Boolean(x.enabled),
+      })),
+      barbers: (barbersByShop.get(row.id) || []).map((b) => ({
+        id: b.id, shopId: row.id, name: b.name, gender: b.gender || "",
+        age: b.age != null ? Number(b.age) : null, phone: b.phone || "", email: b.email || "",
+        experience: b.experience_years || 0, specialization: b.specialization || "",
+        workingDays: parseJson(b.working_days_json, null),
+        queueLimit: Number(b.queue_limit || 10), rating: Number(b.rating),
+        status: b.status, photo: b.photo_url || "",
+        services: servicesByBarber.get(b.id) || [],
+      })),
+    };
+  });
+}
+
 /* ------------------------------------------------------------------ */
 /* Shops                                                               */
 /* ------------------------------------------------------------------ */
 
-export async function listApproved(_req, res) {
+export async function listApproved(req, res) {
   const [rows] = await pool.query(
     `SELECT ${SHOP_PUBLIC_COLUMNS} FROM shops WHERE status='approved' AND active=1 ORDER BY created_at DESC`,
   );
-  res.json(await hydrateShops(rows));
+  const hydrated = await hydrateShops(rows);
+  const etag = `"${crypto
+    .createHash("sha256")
+    .update(JSON.stringify(hydrated))
+    .digest("hex")
+    .slice(0, 16)}"`;
+  res.set("ETag", etag);
+  res.set("Cache-Control", "no-cache");
+  if (req.headers["if-none-match"] === etag) return res.sendStatus(304);
+  res.json(hydrated);
 }
 
 export async function listMine(req, res) {

@@ -280,16 +280,22 @@ export function OwnerProvider({ children }) {
   useEffect(() => {
     if (!sessionStorage.getItem("token")) return;
     let cancelled = false;
+    // Track the last ETag received for GET /shops so we can send If-None-Match
+    // on visibility-triggered refreshes and skip re-rendering when nothing changed.
+    let shopsETag = null;
     const loadServerData = async () => {
       setShopsLoading(true);
       setShopLoadError("");
       try {
+        const shopsHeaders = {};
+        if (shopsETag && sessionRole === "customer")
+          shopsHeaders["If-None-Match"] = shopsETag;
         const shopsReq =
           sessionRole === "owner"
             ? api.get("/shops/mine", { toastOnError: false })
             : sessionRole === "admin"
               ? api.get("/shops/admin/all", { toastOnError: false })
-              : api.get("/shops", { toastOnError: false });
+              : api.get("/shops", { toastOnError: false, headers: shopsHeaders, validateStatus: (s) => s === 200 || s === 304 });
         const usersReq =
           sessionRole === "admin"
             ? api.get("/auth/users", { toastOnError: false })
@@ -302,6 +308,11 @@ export function OwnerProvider({ children }) {
         if (usersRes.status === "fulfilled" && usersRes.value)
           setServerUsers(usersRes.value.data || []);
         if (shopsRes.status === "rejected") throw shopsRes.reason;
+        // 304 Not Modified: shops haven't changed — skip the setState entirely.
+        if (shopsRes.value?.status === 304) return;
+        // Store the new ETag for the next refresh
+        const newETag = shopsRes.value?.headers?.etag;
+        if (newETag) shopsETag = newETag;
         const results = [shopsRes.value];
         const serverShops = (results[0].data || []).map(normalizeDbShop);
         setState((p) => {
@@ -388,11 +399,25 @@ export function OwnerProvider({ children }) {
       }
     };
     loadServerData();
-    const refreshTimer =
-      sessionRole === "customer" ? setInterval(loadServerData, 8000) : null;
+    // Shops are static-ish data (services, photos, barbers). Refresh only when
+    // the tab becomes visible again after being hidden for >5 minutes, instead
+    // of polling every 8 s and re-downloading everything unnecessarily.
+    let lastShopFetch = Date.now();
+    const SHOP_STALE_MS = 5 * 60 * 1000; // 5 minutes
+    const onVisibilityChange = () => {
+      if (
+        document.visibilityState === "visible" &&
+        !cancelled &&
+        Date.now() - lastShopFetch > SHOP_STALE_MS
+      ) {
+        lastShopFetch = Date.now();
+        loadServerData();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       cancelled = true;
-      if (refreshTimer) clearInterval(refreshTimer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [sessionRole, sessionUser?.id]);
 
@@ -1657,6 +1682,9 @@ export function OwnerProvider({ children }) {
         return changed ? { ...p, shops } : p;
       });
     const run = async () => {
+      // Skip polling when the tab is hidden — saves DB load and battery.
+      // The next poll fires immediately once the tab becomes visible again.
+      if (document.visibilityState === "hidden") return;
       try {
         const [notes, bookings, queueRows] = await Promise.all([
           api.get("/notifications/mine", { toastOnError: false }),
@@ -1678,9 +1706,14 @@ export function OwnerProvider({ children }) {
     syncRef.current = run;
     run();
     const timer = setInterval(run, 8000);
+    // When the tab becomes visible after being hidden, run immediately so the
+    // user does not wait up to 8 s for a stale queue to refresh.
+    const onVisible = () => { if (document.visibilityState === "visible") run(); };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       stopped = true;
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [sessionRole, sessionUser?.id]);
 

@@ -1122,10 +1122,7 @@ export async function listQueue(req, res) {
     const scopeSql = queueScopes
       .map(() => "(b.shop_id=? AND b.barber_id=?)")
       .join(" OR ");
-    const scopeParams = queueScopes.flatMap((scope) => [
-      scope.shopId,
-      scope.barberId,
-    ]);
+    const scopeParams = queueScopes.flatMap((s) => [s.shopId, s.barberId]);
     const ownIds = ownRows.map((row) => row.id);
     const ownSql = ownIds.map(() => "?").join(",");
 
@@ -1141,33 +1138,31 @@ export async function listQueue(req, res) {
       "ORDER BY COALESCE(b.skipped_at, b.accepted_at) ASC, b.accepted_at ASC, b.id ASC LIMIT 500",
     );
 
-    await Promise.all(
-      rows.map(async (row) => {
-        const [positionRows] = await pool.query(
-          `SELECT COUNT(*) + 1 AS queue_position
-           FROM payment_bookings x
-           WHERE x.shop_id=? AND x.barber_id=? AND x.status='accepted'
-             AND x.queue_status IN ('Waiting', 'Your Turn', 'Scheduled')
-             AND (
-               COALESCE(x.skipped_at, x.accepted_at) < COALESCE(?, ?)
-               OR (
-                 COALESCE(x.skipped_at, x.accepted_at) = COALESCE(?, ?)
-                 AND x.id <= ?
-               )
-             )`,
-          [
-            row.shop_id,
-            row.barber_id,
-            row.skipped_at,
-            row.accepted_at,
-            row.skipped_at,
-            row.accepted_at,
-            row.id,
-          ],
-        );
-        row.queue_position = positionRows[0]?.queue_position;
-      }),
-    );
+    // Single ROW_NUMBER() query instead of N+1 per-row COUNT queries.
+    // Partitioned by (shop_id, barber_id) so positions are per-queue, not global.
+    if (rows.length) {
+      const positionScopeSql = queueScopes
+        .map(() => "(shop_id=? AND barber_id=?)")
+        .join(" OR ");
+      const [posRows] = await pool.query(
+        `SELECT id, queue_position FROM (
+           SELECT id,
+             ROW_NUMBER() OVER (
+               PARTITION BY shop_id, barber_id
+               ORDER BY COALESCE(skipped_at, accepted_at) ASC, accepted_at ASC, id ASC
+             ) AS queue_position
+           FROM payment_bookings
+           WHERE status='accepted'
+             AND queue_status IN ('Waiting','Your Turn','Scheduled')
+             AND (${positionScopeSql})
+         ) ranked`,
+        scopeParams,
+      );
+      const posById = new Map(posRows.map((r) => [r.id, Number(r.queue_position)]));
+      for (const row of rows) {
+        row.queue_position = posById.get(row.id) ?? null;
+      }
+    }
   } else {
     const { sql, params } = scope(req);
     rows = await findBookings(
